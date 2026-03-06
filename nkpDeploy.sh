@@ -53,19 +53,29 @@ echo -n "Nutanix Password: "
 read -s NUTANIX_PASSWORD
 echo -e "\n"
 
-# 2. Registry Mirror Info
-while true; do
-    read -p "Docker Mirror Username: " MIRROR_USER
-    echo -n "Docker Mirror Password: "
-    read -s MIRROR_PASS
-    echo -e "\n"
-    
-    if check_docker_creds "$MIRROR_USER" "$MIRROR_PASS"; then
-        break
-    else
-        echo -e "${RED}Please re-enter your Docker credentials.${NC}"
-    fi
-done
+# 2. Registry Mirror Logic
+read -p "Is this being deployed in HPOC? (y/n): " IS_HPOC
+
+if [[ "$IS_HPOC" =~ ^[Yy]$ ]]; then
+    MIRROR_URL="https://registry.nutanixdemo.com/docker.io"
+    MIRROR_USER=""
+    MIRROR_PASS=""
+    echo -e "${GREEN}--> HPOC Mode Active. Using Nutanix Demo Registry (No Credentials).${NC}"
+else
+    MIRROR_URL="https://registry-1.docker.io"
+    while true; do
+        read -p "Docker Mirror Username: " MIRROR_USER
+        echo -n "Docker Mirror Password: "
+        read -s MIRROR_PASS
+        echo -e "\n"
+        
+        if check_docker_creds "$MIRROR_USER" "$MIRROR_PASS"; then
+            break
+        else
+            echo -e "${RED}Please re-enter your Docker credentials.${NC}"
+        fi
+    done
+fi
 
 # 3. Cluster Configuration
 read -p "NKP Cluster Name: " CLUSTER_NAME
@@ -96,8 +106,10 @@ printf "${CYAN}%-25s${NC} : %s\n" "Cluster Name" "$CLUSTER_NAME"
 printf "${CYAN}%-25s${NC} : %s\n" "PC Endpoint" "$PC_ENDPOINT"
 printf "${CYAN}%-25s${NC} : %s\n" "Nutanix User" "$NUTANIX_USER"
 echo -e "-------------------------------------------------------"
-printf "${CYAN}%-25s${NC} : %s\n" "Registry Mirror" "https://registry-1.docker.io"
-printf "${CYAN}%-25s${NC} : %s\n" "Mirror Username" "$MIRROR_USER"
+printf "${CYAN}%-25s${NC} : %s\n" "Registry Mirror" "$MIRROR_URL"
+if [ -n "$MIRROR_USER" ]; then
+    printf "${CYAN}%-25s${NC} : %s\n" "Mirror Username" "$MIRROR_USER"
+fi
 echo -e "-------------------------------------------------------"
 printf "${CYAN}%-25s${NC} : %s\n" "Control Plane VIP" "$VIP"
 printf "${CYAN}%-25s${NC} : %s\n" "VM Image" "$VM_IMAGE"
@@ -115,19 +127,22 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# IMPORTANT: Exporting the required Nutanix variables for the nkp binary
 export NUTANIX_USER
 export NUTANIX_PASSWORD
 export NUTANIX_ENDPOINT="https://${PC_ENDPOINT}:9440"
 
 echo -e "${GREEN}Starting NKP deployment...${NC}"
 
+# Define extra flags for registry
+REGISTRY_FLAGS=("--registry-mirror-url=$MIRROR_URL")
+if [ -n "$MIRROR_USER" ]; then
+    REGISTRY_FLAGS+=("--registry-mirror-username=$MIRROR_USER" "--registry-mirror-password=$MIRROR_PASS")
+fi
+
 # Run the deployment
 nkp create cluster nutanix \
+  "${REGISTRY_FLAGS[@]}" \
   --cluster-name "${CLUSTER_NAME}" \
-  --registry-mirror-url "https://registry-1.docker.io" \
-  --registry-mirror-username "${MIRROR_USER}" \
-  --registry-mirror-password "${MIRROR_PASS}" \
   --endpoint "${NUTANIX_ENDPOINT}" \
   --insecure \
   --control-plane-prism-element-cluster "${AHV_CLUSTER}" \
