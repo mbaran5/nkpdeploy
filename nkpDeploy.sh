@@ -35,9 +35,69 @@ check_docker_creds() {
     fi
 }
 
+# Function to validate the LB Range mathematically
 validate_lb_range() {
+    local range=$1
+    
+    # 1. Basic format check
     local range_regex="^([0-9]{1,3}\.){3}[0-9]{1,3}-([0-9]{1,3}\.){3}[0-9]{1,3}$"
-    [[ $1 =~ $range_regex ]]
+    if [[ ! $range =~ $range_regex ]]; then
+        echo -e "${RED}--> Error: Invalid format! Use: x.x.x.x-y.y.y.y${NC}"
+        return 1
+    fi
+
+    # 2. Split into start and end IPs
+    local start_ip="${range%-*}"
+    local end_ip="${range#*-}"
+
+    # Helper function to convert an IP to a comparable integer
+    ip_to_int() {
+        local IFS=.
+        read -r i1 i2 i3 i4 <<< "$1"
+        
+        # Ensure valid IP octets (0-255)
+        if (( 10#$i1 > 255 || 10#$i2 > 255 || 10#$i3 > 255 || 10#$i4 > 255 )); then
+            return 1
+        fi
+        
+        # Convert to an integer using base-10 math
+        echo $(( 10#$i1 * 16777216 + 10#$i2 * 65536 + 10#$i3 * 256 + 10#$i4 ))
+    }
+
+    local start_int end_int
+
+    # 3. Convert and check for invalid octets (e.g. 999.999.999.999)
+    if ! start_int=$(ip_to_int "$start_ip") || ! end_int=$(ip_to_int "$end_ip"); then
+        echo -e "${RED}--> Error: Invalid IP address! Octets must be between 0 and 255.${NC}"
+        return 1
+    fi
+
+    # 4. The actual mathematical comparison
+    if (( start_int > end_int )); then
+        echo -e "${RED}--> Error: Invalid range! Start IP ($start_ip) is higher than End IP ($end_ip).${NC}"
+        return 1
+    fi
+
+    return 0
+}
+
+# Function to ensure LB IPs and VIP share the same /24 subnet
+check_subnet_match() {
+    local vip=$1
+    local range=$2
+
+    # Extract the first three octets
+    local vip_network="${vip%.*}"
+    local start_ip="${range%-*}"
+    local end_ip="${range#*-}"
+    local start_network="${start_ip%.*}"
+    local end_network="${end_ip%.*}"
+
+    if [[ "$vip_network" != "$start_network" || "$vip_network" != "$end_network" ]]; then
+        echo -e "${RED}--> Error: Load Balancer IPs ($range) do not appear to be in the same /24 subnet as the VIP ($vip).${NC}"
+        return 1
+    fi
+    return 0
 }
 
 check_dependencies
@@ -93,9 +153,12 @@ read -p "AHV Network Name: " NETWORK
 read -p "Storage Container Name: " STORAGE
 
 while true; do
-    read -p "Load Balancer IP Range (x.x.x.x-x.x.x.x): " LB_RANGE
-    validate_lb_range "$LB_RANGE" && break
-    echo -e "${RED}--> Invalid format! Use: x.x.x.x-x.x.x.x${NC}"
+    read -p "Load Balancer IP Range (x.x.x.x-y.y.y.y): " LB_RANGE
+    if validate_lb_range "$LB_RANGE"; then
+        if check_subnet_match "$VIP" "$LB_RANGE"; then
+            break
+        fi
+    fi
 done
 
 # --- FINAL CONFIRMATION SCREEN ---
