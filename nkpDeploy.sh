@@ -48,8 +48,8 @@ echo -e "${YELLOW}=======================================================${NC}"
 
 # 1. Nutanix Connection Info
 read -p "Prism Central Endpoint (IP only): " PC_ENDPOINT
-read -p "Nutanix Username: " NUTANIX_USER
-echo -n "Nutanix Password: "
+read -p "Prism Username: " NUTANIX_USER
+echo -n "Prism Password: "
 read -s NUTANIX_PASSWORD
 echo -e "\n"
 
@@ -88,9 +88,9 @@ while true; do
     echo -e "${RED}--> Error: Filename must end with '.qcow2'.${NC}"
 done
 
-read -p "AHV Cluster (Prism Element): " AHV_CLUSTER
-read -p "Network Name: " NETWORK
-read -p "Storage Container: " STORAGE
+read -p "AHV Cluster Name (Prism Element): " AHV_CLUSTER
+read -p "AHV Network Name: " NETWORK
+read -p "Storage Container Name: " STORAGE
 
 while true; do
     read -p "Load Balancer IP Range (x.x.x.x-x.x.x.x): " LB_RANGE
@@ -113,10 +113,10 @@ if [ -n "$MIRROR_USER" ]; then
 fi
 echo -e "-------------------------------------------------------"
 printf "${CYAN}%-25s${NC} : %s\n" "Control Plane VIP" "$VIP"
-printf "${CYAN}%-25s${NC} : %s\n" "VM Image" "$VM_IMAGE"
-printf "${CYAN}%-25s${NC} : %s\n" "AHV Cluster" "$AHV_CLUSTER"
-printf "${CYAN}%-25s${NC} : %s\n" "Network Name" "$NETWORK"
-printf "${CYAN}%-25s${NC} : %s\n" "Storage Container" "$STORAGE"
+printf "${CYAN}%-25s${NC} : %s\n" "VM Image Name" "$VM_IMAGE"
+printf "${CYAN}%-25s${NC} : %s\n" "AHV Cluster Name" "$AHV_CLUSTER"
+printf "${CYAN}%-25s${NC} : %s\n" "AHV Network Name" "$NETWORK"
+printf "${CYAN}%-25s${NC} : %s\n" "Storage Container Name" "$STORAGE"
 printf "${CYAN}%-25s${NC} : %s\n" "Load Balancer Range" "$LB_RANGE"
 echo -e "${YELLOW}=======================================================${NC}"
 
