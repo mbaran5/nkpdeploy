@@ -61,7 +61,7 @@ if [[ "$IS_HPOC" =~ ^[Yy]$ ]]; then
     MIRROR_USER=""
     MIRROR_PASS=""
     CLUSTER_NAME="nkp"
-    echo -e "${GREEN}--> HPOC Mode Active. Using Nutanix Demo Registry (No Credentials).${NC}"
+    echo -e "${GREEN}--> HPOC Mode Active. Using Nutanix Demo Registry (No Credentials) and nkp cluster name.${NC}"
 else
     MIRROR_URL="https://registry-1.docker.io"
     while true; do
