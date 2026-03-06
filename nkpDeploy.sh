@@ -60,6 +60,7 @@ if [[ "$IS_HPOC" =~ ^[Yy]$ ]]; then
     MIRROR_URL="https://registry.nutanixdemo.com/docker.io"
     MIRROR_USER=""
     MIRROR_PASS=""
+    CLUSTER_NAME="nkp"
     echo -e "${GREEN}--> HPOC Mode Active. Using Nutanix Demo Registry (No Credentials).${NC}"
 else
     MIRROR_URL="https://registry-1.docker.io"
@@ -68,6 +69,7 @@ else
         echo -n "Docker Mirror Password: "
         read -s MIRROR_PASS
         echo -e "\n"
+        read -p "NKP Cluster Name: " CLUSTER_NAME
         
         if check_docker_creds "$MIRROR_USER" "$MIRROR_PASS"; then
             break
@@ -78,7 +80,6 @@ else
 fi
 
 # 3. Cluster Configuration
-read -p "NKP Cluster Name: " CLUSTER_NAME
 read -p "Control Plane VIP: " VIP
 
 while true; do
@@ -94,7 +95,7 @@ read -p "Storage Container: " STORAGE
 while true; do
     read -p "Load Balancer IP Range (x.x.x.x-x.x.x.x): " LB_RANGE
     validate_lb_range "$LB_RANGE" && break
-    echo -e "${RED}--> Invalid format! Use: 10.38.239.11-10.38.239.20${NC}"
+    echo -e "${RED}--> Invalid format! Use: x.x.x.x-x.x.x.x${NC}"
 done
 
 # --- FINAL CONFIRMATION SCREEN ---
