@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# ANSI Color Codes
+# --- ANSI Color Codes ---
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 
 # Function to check for required binaries
 check_dependencies() {
-    local dependencies=("nkp" "kubectl" "curl")
+    local dependencies=("nkp" "kubectl")
     for dep in "${dependencies[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
             echo -e "${RED}Error: Required binary '$dep' is not installed.${NC}"
@@ -18,128 +18,83 @@ check_dependencies() {
     done
 }
 
-# Function to validate Docker Hub credentials
-check_docker_creds() {
-    local user=$1
-    local pass=$2
-    echo -e "${CYAN}Verifying Docker Hub credentials...${NC}"
+# Function to Detect NKP Version from the tarball in ~
+detect_nkp_version() {
+    local bundle_file=$(ls ~/nkp-bundle_v*.tar.gz 2>/dev/null | head -n 1)
     
-    local response=$(curl -s -o /dev/null -w "%{http_code}" -u "$user:$pass" "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview:pull")
+    if [ -z "$bundle_file" ]; then
+        echo -e "${RED}Error: NKP bundle file not found in ~. Expected: nkp-bundle_vX.Y.Z_linux_amd64.tar.gz${NC}"
+        exit 1
+    fi
 
-    if [ "$response" == "200" ]; then
-        echo -e "${GREEN}--> Docker Hub authentication successful!${NC}"
-        return 0
+    # Extract version (e.g., v2.17.0)
+    local version=$(echo "$(basename "$bundle_file")" | sed -E 's/.*bundle_(v[0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+    echo "$version"
+}
+
+# Function to Verify Bundle Files Exist
+verify_bundles() {
+    local dir_ver=$1
+    local kommander_path="./nkp-${dir_ver}/container-images/kommander-image-bundle-${dir_ver}.tar"
+    local konvoy_path="./nkp-${dir_ver}/container-images/konvoy-image-bundle-${dir_ver}.tar"
+    local missing=0
+
+    echo -e "${CYAN}Verifying bundle files in current directory...${NC}"
+
+    if [[ ! -f "$kommander_path" ]]; then
+        echo -e "${RED}--> Missing: $kommander_path${NC}"
+        missing=1
+    fi
+
+    if [[ ! -f "$konvoy_path" ]]; then
+        echo -e "${RED}--> Missing: $konvoy_path${NC}"
+        missing=1
+    fi
+
+    if [[ $missing -eq 1 ]]; then
+        echo -e "${RED}Error: Bundle files not found. Please ensure the extraction workflow has completed.${NC}"
+        exit 1
     else
-        echo -e "${RED}--> Error: Docker Hub authentication failed (HTTP $response).${NC}"
-        return 1
+        echo -e "${GREEN}--> Bundle files verified.${NC}"
     fi
 }
 
-# Function to validate the LB Range mathematically
+# Function to validate the LB Range
 validate_lb_range() {
     local range=$1
-    
-    # 1. Basic format check
     local range_regex="^([0-9]{1,3}\.){3}[0-9]{1,3}-([0-9]{1,3}\.){3}[0-9]{1,3}$"
     if [[ ! $range =~ $range_regex ]]; then
         echo -e "${RED}--> Error: Invalid format! Use: x.x.x.x-y.y.y.y${NC}"
         return 1
     fi
-
-    # 2. Split into start and end IPs
-    local start_ip="${range%-*}"
-    local end_ip="${range#*-}"
-
-    # Helper function to convert an IP to a comparable integer
-    ip_to_int() {
-        local IFS=.
-        read -r i1 i2 i3 i4 <<< "$1"
-        
-        # Ensure valid IP octets (0-255)
-        if (( 10#$i1 > 255 || 10#$i2 > 255 || 10#$i3 > 255 || 10#$i4 > 255 )); then
-            return 1
-        fi
-        
-        # Convert to an integer using base-10 math
-        echo $(( 10#$i1 * 16777216 + 10#$i2 * 65536 + 10#$i3 * 256 + 10#$i4 ))
-    }
-
-    local start_int end_int
-
-    # 3. Convert and check for invalid octets (e.g. 999.999.999.999)
-    if ! start_int=$(ip_to_int "$start_ip") || ! end_int=$(ip_to_int "$end_ip"); then
-        echo -e "${RED}--> Error: Invalid IP address! Octets must be between 0 and 255.${NC}"
-        return 1
-    fi
-
-    # 4. The actual mathematical comparison
-    if (( start_int > end_int )); then
-        echo -e "${RED}--> Error: Invalid range! Start IP ($start_ip) is higher than End IP ($end_ip).${NC}"
-        return 1
-    fi
-
     return 0
 }
 
-# Function to ensure LB IPs and VIP share the same /24 subnet
-check_subnet_match() {
-    local vip=$1
-    local range=$2
-
-    # Extract the first three octets
-    local vip_network="${vip%.*}"
-    local start_ip="${range%-*}"
-    local end_ip="${range#*-}"
-    local start_network="${start_ip%.*}"
-    local end_network="${end_ip%.*}"
-
-    if [[ "$vip_network" != "$start_network" || "$vip_network" != "$end_network" ]]; then
-        echo -e "${RED}--> Error: Load Balancer IPs ($range) do not appear to be in the same /24 subnet as the VIP ($vip).${NC}"
-        return 1
-    fi
-    return 0
-}
-
+# --- Initialization ---
 check_dependencies
+NKP_VERSION=$(detect_nkp_version)
+DIR_VERSION="${NKP_VERSION#v}" # 2.17.0
+
+# Pre-flight check for extracted files
+verify_bundles "$DIR_VERSION"
+
+# Setup Paths
+BUNDLE_FLAGS="--bundle ./nkp-${DIR_VERSION}/container-images/kommander-image-bundle-${DIR_VERSION}.tar,./nkp-${DIR_VERSION}/container-images/konvoy-image-bundle-${DIR_VERSION}.tar"
 
 echo -e "${YELLOW}=======================================================${NC}"
-echo -e "${YELLOW}      NKP Nutanix Cluster Deployment Initializer       ${NC}"
+echo -e "${YELLOW}      NKP Nutanix Bundle Deployment Initializer        ${NC}"
+echo -e "${CYAN}      Version Detected: ${GREEN}${NKP_VERSION}${NC}"
 echo -e "${YELLOW}=======================================================${NC}"
 
 # 1. Nutanix Connection Info
 read -p "Prism Central Endpoint (IP only): " PC_ENDPOINT
 read -p "Prism Username: " NUTANIX_USER
-echo -n "Prism Password: "
+echo -ne "${YELLOW}Prism Password: ${NC}"
 read -s NUTANIX_PASSWORD
 echo -e "\n"
 
-# 2. Registry Mirror Logic
-read -p "Is this being deployed in HPOC? (y/n): " IS_HPOC
-
-if [[ "$IS_HPOC" =~ ^[Yy]$ ]]; then
-    MIRROR_URL="https://registry.nutanixdemo.com/docker.io"
-    MIRROR_USER=""
-    MIRROR_PASS=""
-    CLUSTER_NAME="nkp"
-    echo -e "${GREEN}--> HPOC Mode Active. Using Nutanix Demo Registry (No Credentials) and nkp cluster name.${NC}"
-else
-    MIRROR_URL="https://registry-1.docker.io"
-    while true; do
-        read -p "Docker Mirror Username: " MIRROR_USER
-        echo -n "Docker Mirror Password: "
-        read -s MIRROR_PASS
-        echo -e "\n"
-        read -p "NKP Cluster Name: " CLUSTER_NAME
-        
-        if check_docker_creds "$MIRROR_USER" "$MIRROR_PASS"; then
-            break
-        else
-            echo -e "${RED}Please re-enter your Docker credentials.${NC}"
-        fi
-    done
-fi
-
-# 3. Cluster Configuration
+# 2. Cluster Configuration
+read -p "NKP Cluster Name: " CLUSTER_NAME
 read -p "Control Plane VIP: " VIP
 
 while true; do
@@ -154,32 +109,22 @@ read -p "Storage Container Name: " STORAGE
 
 while true; do
     read -p "Load Balancer IP Range (x.x.x.x-y.y.y.y): " LB_RANGE
-    if validate_lb_range "$LB_RANGE"; then
-        if check_subnet_match "$VIP" "$LB_RANGE"; then
-            break
-        fi
-    fi
+    validate_lb_range "$LB_RANGE" && break
 done
 
-# --- FINAL CONFIRMATION SCREEN ---
+# --- FINAL CONFIRMATION ---
 clear
 echo -e "${YELLOW}=======================================================${NC}"
 echo -e "${YELLOW}           FINAL DEPLOYMENT SUMMARY                    ${NC}"
 echo -e "${YELLOW}=======================================================${NC}"
+printf "${CYAN}%-25s${NC} : %s\n" "NKP Version" "$NKP_VERSION"
 printf "${CYAN}%-25s${NC} : %s\n" "Cluster Name" "$CLUSTER_NAME"
 printf "${CYAN}%-25s${NC} : %s\n" "PC Endpoint" "$PC_ENDPOINT"
-printf "${CYAN}%-25s${NC} : %s\n" "Nutanix User" "$NUTANIX_USER"
-echo -e "-------------------------------------------------------"
-printf "${CYAN}%-25s${NC} : %s\n" "Registry Mirror" "$MIRROR_URL"
-if [ -n "$MIRROR_USER" ]; then
-    printf "${CYAN}%-25s${NC} : %s\n" "Mirror Username" "$MIRROR_USER"
-fi
 echo -e "-------------------------------------------------------"
 printf "${CYAN}%-25s${NC} : %s\n" "Control Plane VIP" "$VIP"
 printf "${CYAN}%-25s${NC} : %s\n" "VM Image Name" "$VM_IMAGE"
 printf "${CYAN}%-25s${NC} : %s\n" "AHV Cluster Name" "$AHV_CLUSTER"
 printf "${CYAN}%-25s${NC} : %s\n" "AHV Network Name" "$NETWORK"
-printf "${CYAN}%-25s${NC} : %s\n" "Storage Container Name" "$STORAGE"
 printf "${CYAN}%-25s${NC} : %s\n" "Load Balancer Range" "$LB_RANGE"
 echo -e "${YELLOW}=======================================================${NC}"
 
@@ -187,7 +132,7 @@ echo -e "${YELLOW}Proceed with deployment? (y/n)${NC}"
 read -p "> " CONFIRM
 
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-    echo -e "${RED}Deployment cancelled by user.${NC}"
+    echo -e "${RED}Deployment cancelled.${NC}"
     exit 0
 fi
 
@@ -195,17 +140,11 @@ export NUTANIX_USER
 export NUTANIX_PASSWORD
 export NUTANIX_ENDPOINT="https://${PC_ENDPOINT}:9440"
 
-echo -e "${GREEN}Starting NKP deployment...${NC}"
+echo -e "${GREEN}Starting NKP creation...${NC}"
 
-# Define extra flags for registry
-REGISTRY_FLAGS=("--registry-mirror-url=$MIRROR_URL" "--skip-preflight-checks=Registry")
-if [ -n "$MIRROR_USER" ]; then
-    REGISTRY_FLAGS+=("--registry-mirror-username=$MIRROR_USER" "--registry-mirror-password=$MIRROR_PASS")
-fi
-
-# Run the deployment
+# Run the deployment using the local bundles
 nkp create cluster nutanix \
-  "${REGISTRY_FLAGS[@]}" \
+  ${BUNDLE_FLAGS} \
   --cluster-name "${CLUSTER_NAME}" \
   --endpoint "${NUTANIX_ENDPOINT}" \
   --insecure \
