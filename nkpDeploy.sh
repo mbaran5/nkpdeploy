@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 
 # Function to check for required binaries
 check_dependencies() {
-    local dependencies=("nkp" "kubectl")
+    local dependencies=("kubectl" "curl")
     for dep in "${dependencies[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
             echo -e "${RED}Error: Required binary '$dep' is not installed.${NC}"
@@ -32,31 +32,34 @@ detect_nkp_version() {
     echo "$version"
 }
 
-# Function to Verify Bundle Files Exist
-verify_bundles() {
+# Function to Verify Local Binary and Bundle Files Exist
+verify_assets() {
     local dir_ver=$1
+    local binary="./nkp-${dir_ver}/cli/nkp"
     local kommander_path="./nkp-${dir_ver}/container-images/kommander-image-bundle-${dir_ver}.tar"
     local konvoy_path="./nkp-${dir_ver}/container-images/konvoy-image-bundle-${dir_ver}.tar"
     local missing=0
 
-    echo -e "${CYAN}Verifying bundle files in current directory...${NC}"
+    echo -e "${CYAN}Verifying local assets in ./nkp-${dir_ver}/...${NC}"
 
+    if [[ ! -x "$binary" ]]; then
+        echo -e "${RED}--> Missing or Non-Executable: $binary${NC}"
+        missing=1
+    fi
     if [[ ! -f "$kommander_path" ]]; then
         echo -e "${RED}--> Missing: $kommander_path${NC}"
         missing=1
     fi
-
     if [[ ! -f "$konvoy_path" ]]; then
         echo -e "${RED}--> Missing: $konvoy_path${NC}"
         missing=1
     fi
 
     if [[ $missing -eq 1 ]]; then
-        echo -e "${RED}Error: Bundle files not found. Please ensure the extraction workflow has completed.${NC}"
+        echo -e "${RED}Error: Required files not found. Ensure extraction to ./nkp-${dir_ver} is complete.${NC}"
         exit 1
-    else
-        echo -e "${GREEN}--> Bundle files verified.${NC}"
     fi
+    echo -e "${GREEN}--> All assets verified.${NC}"
 }
 
 # Function to validate the LB Range
@@ -73,12 +76,13 @@ validate_lb_range() {
 # --- Initialization ---
 check_dependencies
 NKP_VERSION=$(detect_nkp_version)
-DIR_VERSION="${NKP_VERSION#v}" # 2.17.0
+DIR_VERSION="${NKP_VERSION#v}" # Strip 'v' for directory naming (e.g., 2.17.0)
 
-# Pre-flight check for extracted files
-verify_bundles "$DIR_VERSION"
+# Verify extraction exists before asking for input
+verify_assets "$DIR_VERSION"
 
-# Setup Paths
+# Construct Bundle Flags and Binary Path
+NKP_BINARY="./nkp-${DIR_VERSION}/cli/nkp"
 BUNDLE_FLAGS="--bundle ./nkp-${DIR_VERSION}/container-images/kommander-image-bundle-${DIR_VERSION}.tar,./nkp-${DIR_VERSION}/container-images/konvoy-image-bundle-${DIR_VERSION}.tar"
 
 echo -e "${YELLOW}=======================================================${NC}"
@@ -136,15 +140,16 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
+# Export credentials for the binary
 export NUTANIX_USER
 export NUTANIX_PASSWORD
 export NUTANIX_ENDPOINT="https://${PC_ENDPOINT}:9440"
 
-echo -e "${GREEN}Starting NKP creation...${NC}"
+echo -e "${GREEN}Starting NKP creation using local assets...${NC}"
 
-# Run the deployment using the local bundles
-nkp create cluster nutanix \
-  ${BUNDLE_FLAGS} \
+# Run the deployment using the local binary and bundles
+$NKP_BINARY create cluster nutanix \
+  $BUNDLE_FLAGS \
   --cluster-name "${CLUSTER_NAME}" \
   --endpoint "${NUTANIX_ENDPOINT}" \
   --insecure \
