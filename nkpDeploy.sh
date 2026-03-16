@@ -45,7 +45,7 @@ if [ -z "$BUNDLE_FILE" ]; then
     read -r RAW_URL
     [[ -z "$RAW_URL" ]] && exit 1
     BUNDLE_FILE=$(basename "${RAW_URL%%\?*}")
-    curl -L -o "$BUNDLE_FILE" "$RAW_URL"
+    curl -kL -o "$BUNDLE_FILE" "$RAW_URL"
 fi
 
 # 3. VERSION & EXTRACTION
