@@ -184,12 +184,43 @@ read -p "Network Name: " NETWORK
 read -p "Storage Container: " STORAGE
 read -p "LB IP Range (x.x.x.x-y.y.y.y): " LB_RANGE
 
-# 5. FINAL DEPLOYMENT SUMMARY (Restored)
+# 5 --- Version Validation ---
+# A. Fetch Prism Central version and strip "pc." prefix
+PC_RAW=$(curl -s -k -u "$NUTANIX_USER:$NUTANIX_PASSWORD" "https://${PC_ENDPOINT}:9440/api/nutanix/v2.0/cluster" | jq -r '.version // empty')
+PC_VERSION=${PC_RAW#pc.}
+
+# B. Find UUID for the specific AHV cluster name provided by user
+C_UUID=$(curl -s -k -u "$NUTANIX_USER:$NUTANIX_PASSWORD" -X POST "https://${PC_ENDPOINT}:9440/api/nutanix/v3/clusters/list" \
+  -H "Content-Type: application/json" -d '{"kind": "cluster"}' \
+  | jq -r --arg NAME "$AHV_CLUSTER" '.entities[] | select(.status.name == $NAME) | .metadata.uuid // empty')
+
+# C. Fetch AOS version using the discovered UUID
+AOS_VERSION=$(curl -s -k -u "$NUTANIX_USER:$NUTANIX_PASSWORD" -X GET "https://${PC_ENDPOINT}:9440/api/nutanix/v3/clusters/$C_UUID" \
+  | jq -r '.status.resources.config.software_map.NOS.version // empty')
+
+# D Compare versions (Must be > 7.3)
+# Returns 0 if $1 > $2
+version_gt() { test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1"; }
+
+if [[ -z "$PC_VERSION" || -z "$AOS_VERSION" ]]; then
+    echo -e "${RED}ERROR: Could not retrieve Nutanix versions. Check credentials or AHV Cluster Name.${NC}"
+    exit 1
+fi
+
+if ! version_gt "$PC_VERSION" "7.3" || ! version_gt "$AOS_VERSION" "7.3"; then
+    echo -e "${RED}ERROR: Installation halted. Incompatible versions detected.${NC}"
+    echo -e "Required: > 7.3 | Detected: PC $PC_RAW, AOS $AOS_VERSION"
+    exit 1
+fi
+
+# 6. FINAL DEPLOYMENT SUMMARY (Restored)
 clear
 echo -e "${YELLOW}=======================================================${NC}"
 echo -e "${YELLOW}           FINAL DEPLOYMENT SUMMARY                    ${NC}"
 echo -e "${YELLOW}=======================================================${NC}"
 printf "${CYAN}%-25s${NC} : %s\n" "NKP Version" "$VERSION_WITH_V"
+printf "${CYAN}%-25s${NC} : %s\n" "Prism Central Version" "$PC_RAW"
+printf "${CYAN}%-25s${NC} : %s\n" "AOS Version" "$AOS_VERSION"
 printf "${CYAN}%-25s${NC} : %s\n" "Cluster Name" "$CLUSTER_NAME"
 printf "${CYAN}%-25s${NC} : %s\n" "PC Endpoint" "$PC_ENDPOINT"
 printf "${CYAN}%-25s${NC} : %s\n" "Control Plane VIP" "$VIP"
@@ -203,7 +234,7 @@ echo -e "${YELLOW}=======================================================${NC}"
 read -p "Proceed with deployment? (y/n) > " CONFIRM
 [[ ! "$CONFIRM" =~ ^[Yy]$ ]] && exit 0
 
-# 6. DEPLOYMENT
+# 7. DEPLOYMENT
 export NUTANIX_USER
 export NUTANIX_PASSWORD
 export NUTANIX_ENDPOINT="https://${PC_ENDPOINT}:9440"
