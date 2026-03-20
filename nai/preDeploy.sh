@@ -35,7 +35,7 @@ if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
 fi
 
 echo ""
-echo "Starting deployment..."
+echo "Deploying Prerequisites..."
 
 # Set the KUBECONFIG context for the current script execution
 export KUBECONFIG="$KUBECONFIG_PATH"
@@ -75,4 +75,4 @@ kubectl -n envoy-gateway-system create secret docker-registry nai-regcred \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""
-echo "Deployment completed successfully!"
+echo "Prerequisites completed successfully! Continue the install from the NKP Application Store"
