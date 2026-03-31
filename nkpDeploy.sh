@@ -60,33 +60,112 @@ fi
 
 # 4. INSTALL BINARIES TO /usr/local/bin
 echo -e "${CYAN}Installing nkp and kubectl to /usr/local/bin...${NC}"
-sudo cp "./$TARGET_DIR/cli/nkp" /usr/local/bin/nkp
-sudo cp "./$TARGET_DIR/kubectl" /usr/local/bin/kubectl
-sudo chmod +x /usr/local/bin/nkp /usr/local/bin/kubectl
-echo -e "${GREEN}--> Binaries installed successfully.${NC}"
+
+# 1. Attempt the copy and chmod
+# We use '&&' to ensure chmod only runs if the copy worked
+if sudo cp "./$TARGET_DIR/cli/nkp" /usr/local/bin/nkp && \
+   sudo cp "./$TARGET_DIR/kubectl" /usr/local/bin/kubectl && \
+   sudo chmod +x /usr/local/bin/nkp /usr/local/bin/kubectl; then
+    
+    # 2. Final Verification: Check if the files actually exist and are executable
+    if [[ -x "/usr/local/bin/nkp" ]] && [[ -x "/usr/local/bin/kubectl" ]]; then
+        echo -e "${GREEN}--> Binaries installed successfully.${NC}"
+    else
+        echo -e "${RED}Error: Files copied but permission check failed.${NC}"
+        exit 1
+    fi
+else
+    echo -e "${RED}Error: Failed to install binaries. Check sudo permissions or source paths.${NC}"
+    exit 1
+fi
 
 # Define Bundle Paths
 KOMMANDER_BUNDLE="./$TARGET_DIR/container-images/kommander-image-bundle-${VERSION_WITH_V}.tar"
 KONVOY_BUNDLE="./$TARGET_DIR/container-images/konvoy-image-bundle-${VERSION_WITH_V}.tar"
 BUNDLE_FLAGS="--bundle ${KOMMANDER_BUNDLE},${KONVOY_BUNDLE}"
 
+# Helper: Convert IP to a number for comparison
+ip2int() {
+    local a b c d
+    IFS=. read -r a b c d <<< "$1"
+    echo "$(( (a << 24) + (b << 16) + (c << 8) + d ))"
+}
+
+# Helper: Check if an IP is in the same /24 subnet (Common for NKP)
+# If you use different CIDRs, let me know!
+is_in_same_subnet() {
+    local ip1=$1
+    local ip2=$2
+    # Masks to the first 3 octets (255.255.255.0)
+    [[ "${ip1%.*}" == "${ip2%.*}" ]]
+}
+
+get_input() {
+    local prompt=$1
+    local var_name=$2
+    local mode=$3 # "lowercase", "ip", or "range"
+    local temp_val=""
+
+    while true; do
+        read -p "$prompt" temp_val
+        
+        # 1. Check if empty
+        if [[ -z "$temp_val" ]]; then
+            echo -e "${RED}Error: This field cannot be empty.${NC}"
+            continue
+        fi
+
+        # 2. Lowercase Validation
+        if [[ "$mode" == "lowercase" ]] && [[ "$temp_val" =~ [A-Z] ]]; then
+            echo -e "${RED}Error: Cluster Name must be lowercase only.${NC}"
+            continue
+        fi
+
+        # 3. IP Range & Subnet Validation
+        if [[ "$mode" == "range" ]]; then
+            # Regex for x.x.x.x-y.y.y.y
+            if [[ ! "$temp_val" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}-([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                echo -e "${RED}Error: Format must be x.x.x.x-y.y.y.y${NC}"
+                continue
+            fi
+
+            # Extract start IP of the range
+            local range_start=$(echo "$temp_val" | cut -d'-' -f1)
+            if ! is_in_same_subnet "$VIP" "$range_start"; then
+                echo -e "${RED}Error: LB Range must be in the same subnet as VIP ($VIP).${NC}"
+                continue
+            fi
+        fi
+
+        eval "$var_name=\"$temp_val\""
+        break
+    done
+}
+
 # 5. USER INPUTS
 echo -e "${YELLOW}=======================================================${NC}"
 echo -e "${CYAN}      NKP Version Detected: ${GREEN}${VERSION_WITH_V}${NC}"
 echo -e "${YELLOW}=======================================================${NC}"
 
-read -p "Prism Central Endpoint (IP): " PC_ENDPOINT
-read -p "Prism Username: " NUTANIX_USER
-echo -ne "${YELLOW}Prism Password: ${NC}"
-read -s NUTANIX_PASSWORD
-echo -e "\n"
-read -p "NKP Cluster Name: " CLUSTER_NAME
-read -p "Control Plane VIP: " VIP
-read -p "VM Image Name (.qcow2): " VM_IMAGE
-read -p "AHV Cluster Name: " AHV_CLUSTER
-read -p "Network Name: " NETWORK
-read -p "Storage Container: " STORAGE
-read -p "LB IP Range (x.x.x.x-y.y.y.y): " LB_RANGE
+get_input "Prism Central Endpoint (IP): " PC_ENDPOINT
+get_input "Prism Username: " NUTANIX_USER
+
+# Password loop
+while [[ -z "$NUTANIX_PASSWORD" ]]; do
+    echo -ne "${YELLOW}Prism Password: ${NC}"
+    read -s NUTANIX_PASSWORD
+    echo -e "\n"
+done
+
+get_input "NKP Cluster Name (lowercase only): " CLUSTER_NAME "lowercase"
+get_input "Control Plane VIP: " VIP
+get_input "VM Image Name (.qcow2): " VM_IMAGE
+get_input "AHV Cluster Name: " AHV_CLUSTER
+get_input "Network Name: " NETWORK
+get_input "Storage Container: " STORAGE
+
+# This will now validate format AND subnet alignment with $VIP
+get_input "LB IP Range (x.x.x.x-y.y.y.y): " LB_RANGE "range"
 
 # 5 --- Version Validation ---
 # A. Fetch Prism Central version and strip "pc." prefix
