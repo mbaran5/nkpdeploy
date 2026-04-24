@@ -1,44 +1,62 @@
-# Nutanix NKP Automated Deployment Script
+# Nutanix Kubernetes Platform (NKP) Automated Deployment
 
-An interactive Bash utility designed to streamline the provisioning of Nutanix Kubernetes Platform (NKP) clusters. This script handles the end-to-end setup: from configuring system-level prerequisites and downloading the NKP bundle, to validating Nutanix environment versions and executing the final deployment.
+![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?style=flat-square&logo=gnu-bash)
+![Nutanix](https://img.shields.io/badge/Platform-Nutanix-0A2E66?style=flat-square)
 
-## 🚀 Features
+An interactive, end-to-end Bash utility designed to streamline the provisioning of Nutanix Kubernetes Platform (NKP) clusters. This deployment script handles everything from configuring system-level prerequisites and managing bundle downloads, to validating Nutanix environment versions and executing the final cluster creation.
 
-* **Automated System Prep**: Automatically checks for and configures system-wide cgroup v2 delegation (requires `sudo`), prompting for a reboot if necessary.
-* **Bundle Management**: Automatically detects local NKP release bundles or prompts for a Nutanix portal download URL to fetch and extract it on the fly.
-* **Auto-Install Binaries**: Extracts and installs the required `nkp` and `kubectl` binaries directly to `/usr/local/bin`.
-* **API Version Validation**: Connects to your Prism Central instance to verify that both Prism Central and AOS versions are > 7.3 before allowing deployment.
-* **Interactive & Safe**: Features a color-coded CLI, masked password inputs, and a final pre-flight summary table requiring manual confirmation before any infrastructure is deployed.
+## 🌟 Key Features
 
-## 🛠 Prerequisites
+- **Automated System Preparation:** Checks for and configures system-wide cgroup v2 delegation (requires `sudo`), prompting for a system reboot only if necessary.
+- **Smart Bundle Management:** Detects existing local NKP release bundles. If missing, it prompts for a Nutanix portal download URL, then seamlessly fetches and extracts the contents on the fly.
+- **Binary Auto-Installation:** Automatically extracts and installs essential binaries (`nkp` and `kubectl`) directly into `/usr/local/bin`.
+- **API Version Validation:** Interfaces with the Prism Central API to ensure that both Prism Central and AOS versions are running version `> 7.3` before allowing deployment to proceed.
+- **Interactive & Secure:** Provides a color-coded CLI experience, safely masks password inputs, and displays a pre-flight summary table that requires manual user confirmation prior to touching your infrastructure.
+- **Cloud-Init Integration:** Includes a base `cloud-init` configuration file for easily bootstrapping the bastion host used in your deployment.
 
-Unlike previous versions, you do **not** need `nkp` or `kubectl` pre-installed. The script will handle that for you. However, the machine running the script must have:
+## 🛠️ Prerequisites
 
-* `curl` (for downloading bundles and API calls)
-* `jq` (essential for parsing Nutanix JSON API responses)
-* `tar` (for bundle extraction)
-* `sudo` privileges (for cgroup delegation and binary installation)
+Unlike older deployment methods, you **do not** need to have `nkp` or `kubectl` pre-installed on your machine—this script provisions them for you! However, the deployment host must have the following available:
 
-## 📖 How to Use
+- `curl` (for fetching bundles and making API requests)
+- `jq` (required to parse Nutanix JSON API responses)
+- `tar` (for archive extraction)
+- `sudo` privileges (for cgroup delegation and installing binaries to system paths)
 
-1. **Clone or Copy** the script to your deployment environment.
-2. **Make it executable**:
-   ```bash
-   chmod +x deploy_nkp.sh
-   ```
+## 🚀 Getting Started
 
-3. **Run the script**:
-   ```bash
-   ./deploy_nkp.sh
-   ```
+### 1. Clone the Repository
+Clone the repository to the machine you intend to run the deployment from:
+```bash
+git clone [https://github.com/mbaran5/nkpdeploy.git](https://github.com/mbaran5/nkpdeploy.git)
+cd nkpdeploy
+```
 
-4. **Follow the prompts**: The script will guide you through entering your Prism credentials, cluster details, and networking information.
+### 2. Make the Script Executable
+Give the primary script the necessary execution permissions:
+```bash
+chmod +x nkpDeploy.sh
+```
 
-## 📝 Environment Variables Set
+### 3. Run the Deployment Script
+Launch the interactive CLI tool:
+```bash
+./nkpDeploy.sh
+```
 
-During execution, the script automatically exports the following variables required by the `nkp` binary:
+### 4. Follow the Interactive Prompts
+The script will safely guide you through entering your:
+- Prism Central IP/FQDN and credentials
+- Target cluster names and compute specifications
+- Networking information
 
-* `NUTANIX_USER`
-* `NUTANIX_PASSWORD`
-* `NUTANIX_ENDPOINT`
-* `KUBECONFIG` (Sets the path to the newly created cluster's config file in your current working directory)
+Review and confirm the details in the final pre-flight summary table to kick off the cluster build.
+
+## ⚙️ Environment Variables
+
+For convenience and seamless execution, the script automatically sets and exports the following environment variables required by the `nkp` binary during runtime:
+
+- `NUTANIX_USER`: Your Prism Central username.
+- `NUTANIX_PASSWORD`: Your Prism Central password.
+- `NUTANIX_ENDPOINT`: The Prism Central API endpoint.
+- `KUBECONFIG`: Sets the context to the newly created cluster's config file (generated in your current working directory).
