@@ -28,7 +28,7 @@ Unlike older deployment methods, you **do not** need to have `nkp` or `kubectl` 
 ### 1. Clone the Repository
 Clone the repository to the machine you intend to run the deployment from:
 ```bash
-git clone [https://github.com/mbaran5/nkpdeploy.git](https://github.com/mbaran5/nkpdeploy.git)
+git clone https://github.com/mbaran5/nkpdeploy.git
 cd nkpdeploy
 ```
 
