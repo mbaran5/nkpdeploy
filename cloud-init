@@ -29,7 +29,7 @@ write_files:
       
       \S
       Kernel \r on an \m
-      
+
   - path: /etc/nologin
     content: |
       System is currently provisioning packages and configuring the kernel.
@@ -42,15 +42,17 @@ write_files:
       [Service]
       Delegate=yes
 
-  # Sorts after both 50-cloud-init.conf and 50-redhat.conf to win.
-  # Do NOT use ssh_pwauth: true — on this image cloud-init writes
-  # PasswordAuthentication no into 50-cloud-init.conf, inverting intent.
-  - path: /etc/ssh/sshd_config.d/51-nutanix.conf
+  # Overwrite sshd_config entirely — the CIS image ships it as a single
+  # line (PasswordAuthentication no) with no Include directive, so drop-ins
+  # in sshd_config.d/ are never read. Our directives go BEFORE the Include
+  # so they win (sshd first-match-wins rule).
+  - path: /etc/ssh/sshd_config
     owner: root:root
     permissions: '0600'
     content: |
       PasswordAuthentication yes
       UsePAM yes
+      Include /etc/ssh/sshd_config.d/*.conf
 
 # 3. Package Management
 package_update: true
@@ -64,14 +66,14 @@ runcmd:
   # Swap out the NKP authselect profile for the standard sssd one
   - authselect select sssd with-faillock --force
 
-  # Ensure nullok is present (idempotent)
+  # Ensure nullok is present in PAM (idempotent)
   - sed -i '/pam_unix.so/{ /nullok/! s/$/ nullok/ }' /etc/pam.d/password-auth /etc/pam.d/system-auth
 
-  # Fix shadow ownership and permissions
+  # Fix shadow ownership and permissions (CIS image ships it as 744 root:root)
   - chown root:shadow /etc/shadow
   - chmod 000 /etc/shadow
 
-  # Validate and reload sshd
+  # Validate sshd config and reload
   - sshd -t && systemctl restart sshd
 
   # Restore normal issue and remove nologin
