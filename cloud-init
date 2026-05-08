@@ -1,7 +1,6 @@
 #cloud-config
 
-ssh_pwauth: true
-
+# 1. User Configuration
 system_info:
   default_user:
     name: nutanix
@@ -18,6 +17,7 @@ chpasswd:
     nutanix:nutanix/4u
   expire: false
 
+# 2. Pre-Provisioning Warnings & Cgroup Config
 write_files:
   - path: /etc/issue
     content: |
@@ -42,19 +42,43 @@ write_files:
       [Service]
       Delegate=yes
 
+  # Sorts after both 50-cloud-init.conf and 50-redhat.conf to win.
+  # Do NOT use ssh_pwauth: true — on this image cloud-init writes
+  # PasswordAuthentication no into 50-cloud-init.conf, inverting intent.
+  - path: /etc/ssh/sshd_config.d/51-nutanix.conf
+    owner: root:root
+    permissions: '0600'
+    content: |
+      PasswordAuthentication yes
+      UsePAM yes
+
+# 3. Package Management
 package_update: true
 package_upgrade: true
 
 packages:
   - podman
 
+# 4. Fixups, then cleanup before reboot
 runcmd:
+  # Swap out the NKP authselect profile for the standard sssd one
   - authselect select sssd with-faillock --force
-  - sed -i '/pam_unix.so/ s/$/ nullok/' /etc/pam.d/password-auth /etc/pam.d/system-auth
+
+  # Ensure nullok is present (idempotent)
+  - sed -i '/pam_unix.so/{ /nullok/! s/$/ nullok/ }' /etc/pam.d/password-auth /etc/pam.d/system-auth
+
+  # Fix shadow ownership and permissions
+  - chown root:shadow /etc/shadow
+  - chmod 000 /etc/shadow
+
+  # Validate and reload sshd
   - sshd -t && systemctl restart sshd
+
+  # Restore normal issue and remove nologin
   - echo -e '\S\nKernel \r on an \m\n' > /etc/issue
   - rm -f /etc/nologin
 
+# 5. Trigger Reboot After Provisioning
 power_state:
   mode: reboot
   message: "Cloud-init provisioning complete. Rebooting to apply cgroup and kernel updates."
