@@ -1,9 +1,7 @@
 #cloud-config
 
-# Enable SSH Password Authentication
 ssh_pwauth: true
 
-# 1. User Configuration
 system_info:
   default_user:
     name: nutanix
@@ -20,7 +18,6 @@ chpasswd:
     nutanix:nutanix/4u
   expire: false
 
-# 2. Pre-Provisioning Warnings & Cgroup Config
 write_files:
   - path: /etc/issue
     content: |
@@ -37,7 +34,7 @@ write_files:
     content: |
       System is currently provisioning packages and configuring the kernel.
       Please wait for the automatic reboot to complete.
-      
+
   - path: /etc/systemd/system/user@.service.d/delegate.conf
     owner: root:root
     permissions: '0644'
@@ -45,19 +42,19 @@ write_files:
       [Service]
       Delegate=yes
 
-# 3. Package Management
 package_update: true
 package_upgrade: true
 
 packages:
   - podman
 
-# 4. Cleanup just before reboot
 runcmd:
+  - authselect select sssd with-faillock --force
+  - sed -i '/pam_unix.so/ s/$/ nullok/' /etc/pam.d/password-auth /etc/pam.d/system-auth
+  - sshd -t && systemctl restart sshd
   - echo -e '\S\nKernel \r on an \m\n' > /etc/issue
   - rm -f /etc/nologin
 
-# 5. Trigger Reboot After Provisioning
 power_state:
   mode: reboot
   message: "Cloud-init provisioning complete. Rebooting to apply cgroup and kernel updates."
