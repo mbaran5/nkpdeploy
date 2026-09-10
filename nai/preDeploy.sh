@@ -319,9 +319,11 @@ select_workspace() {
         for ((INDEX=0; INDEX<BLANK_ROWS; INDEX++)); do frame_row ""; done
         frame_footer "↑/↓ select   Enter confirm   Ctrl-C exit"
 
-        IFS= read -r -s -n 1 KEY < /dev/tty
+        # -N reads an exact byte count; unlike -n, it does not discard the
+        # Enter byte as a line delimiter in some terminal configurations.
+        IFS= read -r -s -N 1 KEY < /dev/tty
         if [[ "$KEY" == $'\033' ]]; then
-            IFS= read -r -s -n 2 KEY2 < /dev/tty
+            IFS= read -r -s -N 2 KEY2 < /dev/tty
             case "$KEY2" in
                 '[A') (( CURRENT > 0 )) && CURRENT=$((CURRENT - 1)) ;;
                 '[B') (( CURRENT < ${#WORKSPACE_ROWS[@]} - 1 )) && CURRENT=$((CURRENT + 1)) ;;
@@ -330,7 +332,7 @@ select_workspace() {
             (( CURRENT > 0 )) && CURRENT=$((CURRENT - 1))
         elif [[ "$KEY" == "j" || "$KEY" == "J" ]]; then
             (( CURRENT < ${#WORKSPACE_ROWS[@]} - 1 )) && CURRENT=$((CURRENT + 1))
-        elif [[ "$KEY" == $'\n' || "$KEY" == $'\r' ]]; then
+        elif [[ -z "$KEY" || "$KEY" == $'\n' || "$KEY" == $'\r' ]]; then
             ROW="${WORKSPACE_ROWS[$CURRENT]}"
             SELECTED_WORKSPACE="${ROW%%|*}"
             SELECTED_NAMESPACE="${ROW#*|}"
