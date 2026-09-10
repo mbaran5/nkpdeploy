@@ -225,6 +225,23 @@ resolve_dependency() {
     return 1
 }
 
+appdeployment_exists() {
+    local APP_ID="$1"
+    local APP_VERSION="$2"
+    local WORKSPACE_NAMESPACE="$3"
+    local EXISTING EXISTING_RC
+
+    EXISTING=$(kubectl get appdeployments -n "$WORKSPACE_NAMESPACE" -o name 2>&1)
+    EXISTING_RC=$?
+    printf '[%s] kubectl get appdeployments -n %s\n%s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$WORKSPACE_NAMESPACE" "${EXISTING:-<none>}" >> "$LOG_FILE"
+
+    # If the resource type is unavailable, let the create command report the
+    # authoritative error rather than falsely claiming it already exists.
+    (( EXISTING_RC != 0 )) && return 1
+    printf '%s\n' "$EXISTING" | grep -Eq "/(${APP_ID}|${APP_ID}-${APP_VERSION})$"
+}
+
 install_required_apps() {
     local WORKSPACE_NAME="$1"
     local WORKSPACE_NAMESPACE="$2"
@@ -256,6 +273,11 @@ install_required_apps() {
         APP_NAME="$RESOLVED_APP_ID"
         APP_VERSION="$RESOLVED_VERSION"
         local RESOURCE_KIND="$RESOLVED_KIND"
+        if appdeployment_exists "$APP_NAME" "$APP_VERSION" "$WORKSPACE_NAMESPACE"; then
+            status "$GREEN" "$RESOURCE_KIND $APP_NAME-$APP_VERSION already installed."
+            DEPLOYMENT_RESULTS+=("$GREEN|$RESOURCE_KIND $APP_NAME-$APP_VERSION already installed")
+            continue
+        fi
         DEPLOYMENT_RESULTS+=("$CYAN|Installing $RESOURCE_KIND $APP_NAME-$APP_VERSION")
         status "$CYAN" "Installing $APP_NAME-$APP_VERSION in $(workspace_display_name "$WORKSPACE_NAME")..."
         DEPLOY_OUTPUT=$(nkp create appdeployment "$APP_NAME" \
