@@ -184,12 +184,38 @@ show_app_table() {
     done <<< "$OUTPUT"
 }
 
+resolve_dependency() {
+    local DEPENDENCY="$1"
+    local APP_OUTPUT="$2"
+    local RESOURCE_KIND="$3"
+    local CANDIDATE="${DEPENDENCY}"
+    local CANDIDATE_NAME CANDIDATE_ID CANDIDATE_VERSION
+
+    # The dependency annotation may contain either an app ID or an app ID
+    # with a version suffix. The authoritative version is always taken from
+    # the inventory captured earlier in this script.
+    if [[ "$CANDIDATE" =~ ^(.+)-[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+        CANDIDATE="${BASH_REMATCH[1]}"
+    fi
+
+    while IFS=$'\t' read -r CANDIDATE_NAME CANDIDATE_ID CANDIDATE_VERSION; do
+        [[ -z "$CANDIDATE_ID" || "$CANDIDATE_ID" == "APP-ID" ]] && continue
+        if [[ "$CANDIDATE_NAME" == "$CANDIDATE" || "$CANDIDATE_ID" == "$CANDIDATE" ]]; then
+            RESOLVED_APP_ID="$CANDIDATE_ID"
+            RESOLVED_VERSION="$CANDIDATE_VERSION"
+            RESOLVED_KIND="$RESOURCE_KIND"
+            return 0
+        fi
+    done < <(printf '%s\n' "$APP_OUTPUT" | sed $'s/\302\240/ /g' | awk 'NF >= 3 && $1 != "NAME" {print $1 "\t" $2 "\t" $3}')
+    return 1
+}
+
 install_required_apps() {
     local WORKSPACE_NAME="$1"
     local WORKSPACE_NAMESPACE="$2"
     local APP_OUTPUT="$3"
     local REQUIRED="${REQUIRED_DEPENDENCIES:-}"
-    local DEPENDENCY APP_NAME APP_VERSION
+    local DEPENDENCY APP_NAME APP_VERSION DEPLOY_OUTPUT DEPLOY_RC
 
     if [[ -z "$REQUIRED" ]]; then
         status "$YELLOW" "No required-dependencies annotation found for nutanix-ai-2.8.0."
@@ -203,35 +229,28 @@ install_required_apps() {
         DEPENDENCY=$(printf '%s' "$DEPENDENCY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[\[\]" ]//g')
         [[ -z "$DEPENDENCY" ]] && continue
 
-        # Dependencies are represented as app-name-version. Split at the
-        # version suffix so app names containing hyphens remain intact.
-        if [[ "$DEPENDENCY" =~ ^(.+)-([0-9]+\.[0-9]+\.[0-9]+[^/]*)$ ]]; then
-            APP_NAME="${BASH_REMATCH[1]}"
-            APP_VERSION="${BASH_REMATCH[2]}"
-        else
-            status "$YELLOW" "Skipping unrecognized dependency: $DEPENDENCY"
+        RESOLVED_APP_ID=""
+        RESOLVED_VERSION=""
+        RESOLVED_KIND=""
+        if ! resolve_dependency "$DEPENDENCY" "$APP_OUTPUT" "App" && \
+           ! resolve_dependency "$DEPENDENCY" "${CLUSTER_APPS:-}" "ClusterApp"; then
+            status "$YELLOW" "Required dependency not found in app inventory: $DEPENDENCY"
+            DEPLOYMENT_RESULTS+=("$YELLOW|Dependency $DEPENDENCY not found")
             continue
         fi
-
-        local RESOURCE_KIND="App"
-        local MATCHED="false"
-        if printf '%s\n' "$APP_OUTPUT" | grep -Eq "^[[:space:]]*${APP_NAME}[[:space:]]+.*${APP_VERSION}([[:space:]]|$)"; then
-            MATCHED="true"
-        elif printf '%s\n' "${CLUSTER_APPS:-}" | grep -Eq "^[[:space:]]*${APP_NAME}[[:space:]]+.*${APP_VERSION}([[:space:]]|$)"; then
-            RESOURCE_KIND="ClusterApp"
-            MATCHED="true"
-        fi
-        if [[ "$MATCHED" != true ]]; then
-            status "$YELLOW" "Required dependency not found in app inventory: $APP_NAME-$APP_VERSION"
-            DEPLOYMENT_RESULTS+=("$YELLOW|$RESOURCE_KIND $APP_NAME-$APP_VERSION not found")
-            continue
-        fi
+        APP_NAME="$RESOLVED_APP_ID"
+        APP_VERSION="$RESOLVED_VERSION"
+        local RESOURCE_KIND="$RESOLVED_KIND"
+        DEPLOYMENT_RESULTS+=("$CYAN|Installing $RESOURCE_KIND $APP_NAME-$APP_VERSION")
         status "$CYAN" "Installing $APP_NAME-$APP_VERSION in $(workspace_display_name "$WORKSPACE_NAME")..."
-        if ! nkp create appdeployment "$APP_NAME" \
+        DEPLOY_OUTPUT=$(nkp create appdeployment "$APP_NAME" \
             --app "$APP_NAME-$APP_VERSION" \
-            --workspace "$WORKSPACE_NAME"; then
-            status "$RED" "Failed to install $APP_NAME-$APP_VERSION."
-            DEPLOYMENT_RESULTS+=("$RED|$RESOURCE_KIND $APP_NAME-$APP_VERSION failed")
+            --workspace "$WORKSPACE_NAME" 2>&1)
+        DEPLOY_RC=$?
+        if (( DEPLOY_RC != 0 )); then
+            DEPLOY_OUTPUT=$(printf '%s' "$DEPLOY_OUTPUT" | tr '\n' ' ' | cut -c1-180)
+            status "$RED" "Failed to install $APP_NAME-$APP_VERSION: ${DEPLOY_OUTPUT:-no error output}"
+            DEPLOYMENT_RESULTS+=("$RED|$RESOURCE_KIND $APP_NAME-$APP_VERSION failed: ${DEPLOY_OUTPUT:-no error output}")
             return 1
         fi
         DEPLOYMENT_RESULTS+=("$GREEN|$RESOURCE_KIND $APP_NAME-$APP_VERSION deployed")
@@ -480,6 +499,7 @@ kubectl -n nai-system create secret docker-registry nai-regcred \
   --docker-password="$DOCKER_PAT" \
   --docker-email="$DOCKER_USER" \
   --dry-run=client -o yaml | kubectl apply -f -
+DEPLOYMENT_RESULTS+=("$GREEN|Secret nai-regcred created in nai-system")
 
 kubectl -n envoy-gateway-system create secret docker-registry nai-regcred \
   --docker-server=https://index.docker.io/v1/ \
@@ -487,7 +507,7 @@ kubectl -n envoy-gateway-system create secret docker-registry nai-regcred \
   --docker-password="$DOCKER_PAT" \
   --docker-email="$DOCKER_USER" \
   --dry-run=client -o yaml | kubectl apply -f -
-DEPLOYMENT_RESULTS+=("$GREEN|Registry secret nai-regcred applied in both namespaces")
+DEPLOYMENT_RESULTS+=("$GREEN|Secret nai-regcred created in envoy-gateway-system")
 
 install_required_apps "$SELECTED_WORKSPACE" "$SELECTED_NAMESPACE" "$SELECTED_APPS" || true
 
