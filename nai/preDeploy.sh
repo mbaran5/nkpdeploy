@@ -19,8 +19,10 @@ SCREEN_INNER=78
 ALT_SCREEN_ACTIVE=0
 DEPLOYMENT_RESULTS=()
 LOG_FILE="${TMPDIR:-/tmp}/nai-predeploy-$(date +%Y%m%d-%H%M%S).log"
+SCREEN_LOG="${LOG_FILE%.log}-screen.log"
 : > "$LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
+: > "$SCREEN_LOG"
+exec > >(tee -a "$SCREEN_LOG") 2>&1
 
 tui_enter() {
     if [[ "$ALT_SCREEN_ACTIVE" != 1 && -t 1 ]]; then
@@ -88,6 +90,7 @@ frame_footer() {
 }
 
 status() {
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$2" >> "$LOG_FILE"
     frame_row_color "$1" "  ● $2"
 }
 
@@ -495,7 +498,7 @@ frame_row ""
 status "$CYAN" "Kubeconfig exported for this session."
 
 status "$CYAN" "Applying NAI NFS StorageClass..."
-cat <<EOF | kubectl apply -f -
+cat <<EOF | kubectl apply -f - >> "$LOG_FILE" 2>&1
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -511,8 +514,8 @@ EOF
 DEPLOYMENT_RESULTS+=("$GREEN|StorageClass nai-nfs-storage applied")
 
 status "$CYAN" "Creating required namespaces..."
-kubectl create namespace nai-system --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace envoy-gateway-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace nai-system --dry-run=client -o yaml 2>> "$LOG_FILE" | kubectl apply -f - >> "$LOG_FILE" 2>&1
+kubectl create namespace envoy-gateway-system --dry-run=client -o yaml 2>> "$LOG_FILE" | kubectl apply -f - >> "$LOG_FILE" 2>&1
 DEPLOYMENT_RESULTS+=("$GREEN|Namespaces nai-system and envoy-gateway-system ready")
 
 status "$CYAN" "Creating DockerHub image-pull secrets..."
@@ -521,7 +524,7 @@ kubectl -n nai-system create secret docker-registry nai-regcred \
   --docker-username="$DOCKER_USER" \
   --docker-password="$DOCKER_PAT" \
   --docker-email="$DOCKER_USER" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --dry-run=client -o yaml 2>> "$LOG_FILE" | kubectl apply -f - >> "$LOG_FILE" 2>&1
 DEPLOYMENT_RESULTS+=("$GREEN|Secret nai-regcred created in nai-system")
 
 kubectl -n envoy-gateway-system create secret docker-registry nai-regcred \
@@ -529,7 +532,7 @@ kubectl -n envoy-gateway-system create secret docker-registry nai-regcred \
   --docker-username="$DOCKER_USER" \
   --docker-password="$DOCKER_PAT" \
   --docker-email="$DOCKER_USER" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --dry-run=client -o yaml 2>> "$LOG_FILE" | kubectl apply -f - >> "$LOG_FILE" 2>&1
 DEPLOYMENT_RESULTS+=("$GREEN|Secret nai-regcred created in envoy-gateway-system")
 
 install_required_apps "$SELECTED_WORKSPACE" "$SELECTED_NAMESPACE" "$SELECTED_APPS" || true
