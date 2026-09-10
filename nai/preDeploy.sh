@@ -18,6 +18,9 @@ SCREEN_ROWS=24
 SCREEN_INNER=78
 ALT_SCREEN_ACTIVE=0
 DEPLOYMENT_RESULTS=()
+LOG_FILE="${TMPDIR:-/tmp}/nai-predeploy-$(date +%Y%m%d-%H%M%S).log"
+: > "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 tui_enter() {
     if [[ "$ALT_SCREEN_ACTIVE" != 1 && -t 1 ]]; then
@@ -53,8 +56,17 @@ frame_setup() {
 
 frame_row() {
     local TEXT="$1"
-    (( ${#TEXT} > SCREEN_INNER )) && TEXT="${TEXT:0:SCREEN_INNER-3}..."
-    printf '%b│%b %-*s %b│%b\n' "$PURPLE" "$RESET" "$((SCREEN_INNER - 2))" "$TEXT" "$PURPLE" "$RESET" >&2
+    (( ${#TEXT} > SCREEN_INNER - 1 )) && TEXT="${TEXT:0:SCREEN_INNER-4}..."
+    printf '%b│%b%-*s %b│%b\n' "$PURPLE" "$RESET" "$((SCREEN_INNER - 1))" "$TEXT" "$PURPLE" "$RESET" >&2
+}
+
+frame_row_color() {
+    local COLOR="$1"
+    local TEXT="$2"
+    (( ${#TEXT} > SCREEN_INNER - 1 )) && TEXT="${TEXT:0:SCREEN_INNER-4}..."
+    printf '%b│%b%b%-*s%b %b│%b\n' \
+        "$PURPLE" "$RESET" "$COLOR" "$((SCREEN_INNER - 1))" "$TEXT" \
+        "$RESET" "$PURPLE" "$RESET" >&2
 }
 
 frame_header() {
@@ -76,7 +88,7 @@ frame_footer() {
 }
 
 status() {
-    printf '%b  ●%b %s\n' "$1" "$RESET" "$2" >&2
+    frame_row_color "$1" "  ● $2"
 }
 
 abort_with_error() {
@@ -93,7 +105,7 @@ abort_with_error() {
 
 prompt() {
     local INPUT_TEXT="  $1: "
-    local INPUT_COLUMN=$((2 + ${#INPUT_TEXT}))
+    local INPUT_COLUMN=$((1 + ${#INPUT_TEXT}))
     local CONTENT_ROWS=0
     local BLANK_ROWS=0
     local INDEX=0
@@ -247,6 +259,11 @@ install_required_apps() {
             --app "$APP_NAME-$APP_VERSION" \
             --workspace "$WORKSPACE_NAME" 2>&1)
         DEPLOY_RC=$?
+        {
+            printf '\n[%s] nkp create appdeployment %s --app %s-%s --workspace %s\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S')" "$APP_NAME" "$APP_NAME" "$APP_VERSION" "$WORKSPACE_NAME"
+            printf '%s\n' "$DEPLOY_OUTPUT"
+        } >> "$LOG_FILE"
         if (( DEPLOY_RC != 0 )); then
             DEPLOY_OUTPUT=$(printf '%s' "$DEPLOY_OUTPUT" | tr '\n' ' ' | cut -c1-180)
             status "$RED" "Failed to install $APP_NAME-$APP_VERSION: ${DEPLOY_OUTPUT:-no error output}"
@@ -272,6 +289,7 @@ discover_workspaces_and_apps() {
         printf '%s\n' "$WORKSPACES_OUTPUT" >&2
         return 1
     }
+    printf '[%s] nkp get workspaces\n%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$WORKSPACES_OUTPUT" >> "$LOG_FILE"
 
     status "$CYAN" "Workspace list captured."
 
@@ -310,6 +328,7 @@ discover_workspaces_and_apps() {
         show_app_table "kubectl error" "$CLUSTER_APPS"
         return 1
     fi
+    printf '[%s] kubectl get clusterapps\n%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CLUSTER_APPS" >> "$LOG_FILE"
     status "$CYAN" "Cluster application inventory captured."
 
     for ROW in "${WORKSPACE_ROWS[@]}"; do
@@ -323,6 +342,7 @@ discover_workspaces_and_apps() {
             show_app_table "kubectl error" "$APPS"
             return 1
         fi
+        printf '[%s] kubectl get apps -n %s\n%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$WORKSPACE_NAMESPACE" "$APPS" >> "$LOG_FILE"
         status "$CYAN" "Application inventory captured for $DISPLAY_NAME."
         INDEX=$((INDEX + 1))
     done
@@ -394,11 +414,13 @@ load_selected_dependencies() {
     REQUIRED_DEPENDENCIES=$(kubectl get app nutanix-ai-2.8.0 \
         -n "$SELECTED_NAMESPACE" \
         -o jsonpath='{.metadata.annotations.apps\.kommander\.d2iq\.io/required-dependencies}{"\n"}' 2>/dev/null) || true
+    printf '[%s] required dependencies for nutanix-ai-2.8.0 in %s\n%s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$SELECTED_NAMESPACE" "${REQUIRED_DEPENDENCIES:-<none>}" >> "$LOG_FILE"
 }
 
 confirm_final_summary() {
-    local PROMPT_TEXT="  Proceed with prerequisite and app setup? [Y/N]"
-    local INPUT_COLUMN=$((2 + ${#PROMPT_TEXT}))
+    local PROMPT_TEXT="  Proceed with prerequisite and app setup? [Y/N] "
+    local INPUT_COLUMN=$((1 + ${#PROMPT_TEXT}))
     local CONTENT_ROWS=0 BLANK_ROWS=0 INDEX=0 CONFIRM=""
 
     frame_setup
@@ -415,10 +437,11 @@ confirm_final_summary() {
     summary_row "Workspaces Discovered" "${#WORKSPACE_ROWS[@]}"
     summary_row "Target Workspace" "$(workspace_display_name "$SELECTED_WORKSPACE")"
     summary_row "Target Namespace" "$SELECTED_NAMESPACE"
-    summary_row "Target Prerequisites" "${REQUIRED_DEPENDENCIES:-None found}"
+summary_row "Target Prerequisites" "${REQUIRED_DEPENDENCIES:-None found}"
+    summary_row "Execution Log" "$LOG_FILE"
     frame_row ""
     frame_row "$PROMPT_TEXT"
-    CONTENT_ROWS=11
+    CONTENT_ROWS=12
     BLANK_ROWS=$((SCREEN_ROWS - 7 - CONTENT_ROWS))
     (( BLANK_ROWS < 0 )) && BLANK_ROWS=0
     for ((INDEX=0; INDEX<BLANK_ROWS; INDEX++)); do frame_row ""; done
@@ -520,5 +543,6 @@ for RESULT in "${DEPLOYMENT_RESULTS[@]}"; do
 done
 frame_row ""
 frame_row "  Continue the install from the NKP Application Store."
+frame_row "  Execution log: $LOG_FILE"
 frame_footer "Press Enter to exit"
 read -r < /dev/tty
