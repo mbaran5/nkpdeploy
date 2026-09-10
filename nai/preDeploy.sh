@@ -17,6 +17,7 @@ SCREEN_COLS=80
 SCREEN_ROWS=24
 SCREEN_INNER=78
 ALT_SCREEN_ACTIVE=0
+DEPLOYMENT_RESULTS=()
 
 tui_enter() {
     if [[ "$ALT_SCREEN_ACTIVE" != 1 && -t 1 ]]; then
@@ -190,7 +191,11 @@ install_required_apps() {
     local REQUIRED="${REQUIRED_DEPENDENCIES:-}"
     local DEPENDENCY APP_NAME APP_VERSION
 
-    [[ -z "$REQUIRED" ]] && return 0
+    if [[ -z "$REQUIRED" ]]; then
+        status "$YELLOW" "No required-dependencies annotation found for nutanix-ai-2.8.0."
+        DEPLOYMENT_RESULTS+=("$YELLOW|No NAI prerequisite app dependencies found")
+        return 0
+    fi
 
     frame_row ""
     frame_row "  Required dependencies for nutanix-ai-2.8.0"
@@ -208,24 +213,34 @@ install_required_apps() {
             continue
         fi
 
+        local RESOURCE_KIND="App"
+        local MATCHED="false"
         if printf '%s\n' "$APP_OUTPUT" | grep -Eq "^[[:space:]]*${APP_NAME}[[:space:]]+.*${APP_VERSION}([[:space:]]|$)"; then
-            status "$GREEN" "$APP_NAME-$APP_VERSION already available in $(workspace_display_name "$WORKSPACE_NAME")."
+            MATCHED="true"
+        elif printf '%s\n' "${CLUSTER_APPS:-}" | grep -Eq "^[[:space:]]*${APP_NAME}[[:space:]]+.*${APP_VERSION}([[:space:]]|$)"; then
+            RESOURCE_KIND="ClusterApp"
+            MATCHED="true"
+        fi
+        if [[ "$MATCHED" != true ]]; then
+            status "$YELLOW" "Required dependency not found in app inventory: $APP_NAME-$APP_VERSION"
+            DEPLOYMENT_RESULTS+=("$YELLOW|$RESOURCE_KIND $APP_NAME-$APP_VERSION not found")
             continue
         fi
-
         status "$CYAN" "Installing $APP_NAME-$APP_VERSION in $(workspace_display_name "$WORKSPACE_NAME")..."
         if ! nkp create appdeployment "$APP_NAME" \
             --app "$APP_NAME-$APP_VERSION" \
             --workspace "$WORKSPACE_NAME"; then
             status "$RED" "Failed to install $APP_NAME-$APP_VERSION."
+            DEPLOYMENT_RESULTS+=("$RED|$RESOURCE_KIND $APP_NAME-$APP_VERSION failed")
             return 1
         fi
+        DEPLOYMENT_RESULTS+=("$GREEN|$RESOURCE_KIND $APP_NAME-$APP_VERSION deployed")
     done < <(printf '%s' "$REQUIRED" | tr ',' '\n')
 }
 
 discover_workspaces_and_apps() {
     local WORKSPACES_OUTPUT=""
-    local CLUSTER_APPS=""
+    CLUSTER_APPS=""
     local WORKSPACE_NAME WORKSPACE_NAMESPACE DISPLAY_NAME APPS
     WORKSPACE_ROWS=()
     local INDEX=0
@@ -296,7 +311,10 @@ discover_workspaces_and_apps() {
 
 select_workspace() {
     local CURRENT=0 KEY KEY2 ROW NAME NAMESPACE DISPLAY INDEX
-    stty -icanon -echo < /dev/tty 2>/dev/null || true
+    local OLD_STTY
+    [[ -c /dev/tty ]] || return 1
+    OLD_STTY=$(stty -g < /dev/tty) || return 1
+    stty -echo -icanon min 1 time 0 < /dev/tty || return 1
     while true; do
         frame_header "Select target workspace"
         frame_row ""
@@ -319,14 +337,18 @@ select_workspace() {
         for ((INDEX=0; INDEX<BLANK_ROWS; INDEX++)); do frame_row ""; done
         frame_footer "↑/↓ select   Enter confirm   Ctrl-C exit"
 
-        # -N reads an exact byte count; unlike -n, it does not discard the
-        # Enter byte as a line delimiter in some terminal configurations.
-        IFS= read -r -s -N 1 KEY < /dev/tty
-        if [[ "$KEY" == $'\033' ]]; then
-            IFS= read -r -s -N 2 KEY2 < /dev/tty
-            case "$KEY2" in
-                '[A') (( CURRENT > 0 )) && CURRENT=$((CURRENT - 1)) ;;
-                '[B') (( CURRENT < ${#WORKSPACE_ROWS[@]} - 1 )) && CURRENT=$((CURRENT + 1)) ;;
+        IFS= read -r -s -n 1 KEY < /dev/tty
+        if [[ -z "$KEY" ]]; then
+            stty "$OLD_STTY" < /dev/tty
+            ROW="${WORKSPACE_ROWS[$CURRENT]}"
+            SELECTED_WORKSPACE="${ROW%%|*}"
+            SELECTED_NAMESPACE="${ROW#*|}"
+            return 0
+        elif [[ "$KEY" == $'\033' ]]; then
+            IFS= read -r -s -n 2 -t 0.1 KEY2 < /dev/tty || true
+            case "${KEY}${KEY2}" in
+                $'\033[A') (( CURRENT > 0 )) && CURRENT=$((CURRENT - 1)) ;;
+                $'\033[B') (( CURRENT < ${#WORKSPACE_ROWS[@]} - 1 )) && CURRENT=$((CURRENT + 1)) ;;
             esac
         elif [[ "$KEY" == "k" || "$KEY" == "K" ]]; then
             (( CURRENT > 0 )) && CURRENT=$((CURRENT - 1))
@@ -336,8 +358,11 @@ select_workspace() {
             ROW="${WORKSPACE_ROWS[$CURRENT]}"
             SELECTED_WORKSPACE="${ROW%%|*}"
             SELECTED_NAMESPACE="${ROW#*|}"
-            stty echo icanon < /dev/tty 2>/dev/null || true
+            stty "$OLD_STTY" < /dev/tty
             return 0
+        elif [[ "$KEY" == "q" || "$KEY" == "Q" ]]; then
+            stty "$OLD_STTY" < /dev/tty
+            return 1
         fi
     done
 }
@@ -441,10 +466,12 @@ provisioner: csi.nutanix.com
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 EOF
+DEPLOYMENT_RESULTS+=("$GREEN|StorageClass nai-nfs-storage applied")
 
 status "$CYAN" "Creating required namespaces..."
 kubectl create namespace nai-system --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace envoy-gateway-system --dry-run=client -o yaml | kubectl apply -f -
+DEPLOYMENT_RESULTS+=("$GREEN|Namespaces nai-system and envoy-gateway-system ready")
 
 status "$CYAN" "Creating DockerHub image-pull secrets..."
 kubectl -n nai-system create secret docker-registry nai-regcred \
@@ -460,14 +487,17 @@ kubectl -n envoy-gateway-system create secret docker-registry nai-regcred \
   --docker-password="$DOCKER_PAT" \
   --docker-email="$DOCKER_USER" \
   --dry-run=client -o yaml | kubectl apply -f -
+DEPLOYMENT_RESULTS+=("$GREEN|Registry secret nai-regcred applied in both namespaces")
 
 install_required_apps "$SELECTED_WORKSPACE" "$SELECTED_NAMESPACE" "$SELECTED_APPS" || true
 
 frame_header "Prerequisites complete"
 frame_row ""
-status "$GREEN" "StorageClass applied: nai-nfs-storage"
-status "$GREEN" "Namespaces ready: nai-system, envoy-gateway-system"
-status "$GREEN" "Registry secrets ready: nai-regcred"
+for RESULT in "${DEPLOYMENT_RESULTS[@]}"; do
+    RESULT_COLOR="${RESULT%%|*}"
+    RESULT_MESSAGE="${RESULT#*|}"
+    status "$RESULT_COLOR" "$RESULT_MESSAGE"
+done
 frame_row ""
 frame_row "  Continue the install from the NKP Application Store."
 frame_footer "Press Enter to exit"
