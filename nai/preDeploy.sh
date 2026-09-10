@@ -227,7 +227,7 @@ discover_workspaces_and_apps() {
     local WORKSPACES_OUTPUT=""
     local CLUSTER_APPS=""
     local WORKSPACE_NAME WORKSPACE_NAMESPACE DISPLAY_NAME APPS
-    local WORKSPACE_ROWS=()
+    WORKSPACE_ROWS=()
     local INDEX=0
 
     frame_header "Discovering workspaces and applications"
@@ -239,7 +239,7 @@ discover_workspaces_and_apps() {
         return 1
     }
 
-    show_app_table "Available workspaces" "$WORKSPACES_OUTPUT"
+    status "$CYAN" "Workspace list captured."
 
     # Prefer structured output. The human-readable table varies between NKP
     # releases and may include notices before the header, which made the
@@ -276,7 +276,7 @@ discover_workspaces_and_apps() {
         show_app_table "kubectl error" "$CLUSTER_APPS"
         return 1
     fi
-    show_app_table "Cluster applications" "$CLUSTER_APPS"
+    status "$CYAN" "Cluster application inventory captured."
 
     for ROW in "${WORKSPACE_ROWS[@]}"; do
         WORKSPACE_NAME="${ROW%%|*}"
@@ -289,7 +289,7 @@ discover_workspaces_and_apps() {
             show_app_table "kubectl error" "$APPS"
             return 1
         fi
-        show_app_table "Workspace applications: $DISPLAY_NAME" "$APPS"
+        status "$CYAN" "Application inventory captured for $DISPLAY_NAME."
         INDEX=$((INDEX + 1))
     done
 }
