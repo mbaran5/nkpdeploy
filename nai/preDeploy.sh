@@ -60,6 +60,13 @@ clean_text() {
     printf '%s' "$1" | sed -E $'s|\033\\[[0-9;?]*[ -/]*[@-~]||g; s|\r| |g; s|\t| |g'
 }
 
+version_is_newer() {
+    local CANDIDATE="$1"
+    local CURRENT="$2"
+    [[ -z "$CURRENT" ]] && return 0
+    [[ "$CANDIDATE" == "$(printf '%s\n%s\n' "$CANDIDATE" "$CURRENT" | sort -V | tail -n 1)" && "$CANDIDATE" != "$CURRENT" ]]
+}
+
 frame_row() {
     local TEXT="$1"
     TEXT=$(clean_text "$TEXT")
@@ -214,6 +221,7 @@ resolve_dependency() {
     local RESOURCE_KIND="$3"
     local CANDIDATE="${DEPENDENCY}"
     local CANDIDATE_NAME CANDIDATE_ID CANDIDATE_VERSION
+    local BEST_VERSION=""
 
     # The dependency annotation may contain either an app ID or an app ID
     # with a version suffix. The authoritative version is always taken from
@@ -225,13 +233,17 @@ resolve_dependency() {
     while IFS=$'\t' read -r CANDIDATE_NAME CANDIDATE_ID CANDIDATE_VERSION; do
         [[ -z "$CANDIDATE_ID" || "$CANDIDATE_ID" == "APP-ID" ]] && continue
         if [[ "$CANDIDATE_NAME" == "$CANDIDATE" || "$CANDIDATE_ID" == "$CANDIDATE" ]]; then
-            RESOLVED_APP_ID="$CANDIDATE_ID"
-            RESOLVED_VERSION="$CANDIDATE_VERSION"
-            RESOLVED_KIND="$RESOURCE_KIND"
-            return 0
+            # Inventory order is not guaranteed. Keep scanning and select
+            # the newest release rather than the first matching row.
+            if [[ -z "$BEST_VERSION" ]] || version_is_newer "$CANDIDATE_VERSION" "$BEST_VERSION"; then
+                BEST_VERSION="$CANDIDATE_VERSION"
+                RESOLVED_APP_ID="$CANDIDATE_ID"
+                RESOLVED_VERSION="$CANDIDATE_VERSION"
+                RESOLVED_KIND="$RESOURCE_KIND"
+            fi
         fi
     done < <(printf '%s\n' "$APP_OUTPUT" | sed $'s/\302\240/ /g' | awk 'NF >= 3 && $1 != "NAME" {print $1 "\t" $2 "\t" $3}')
-    return 1
+    [[ -n "$BEST_VERSION" ]]
 }
 
 appdeployment_exists() {
@@ -441,6 +453,7 @@ select_workspace() {
 }
 
 load_selected_dependencies() {
+    local DEPENDENCY RESOLVED_LIST=""
     if ! SELECTED_APPS=$(kubectl get apps -n "$SELECTED_NAMESPACE" \
         -o custom-columns='NAME:.metadata.name,APP-ID:.spec.appId,VERSION:.spec.version' 2>&1); then
         return 1
@@ -450,6 +463,20 @@ load_selected_dependencies() {
         -o jsonpath='{.metadata.annotations.apps\.kommander\.d2iq\.io/required-dependencies}{"\n"}' 2>/dev/null) || true
     printf '[%s] required dependencies for nutanix-ai-2.8.0 in %s\n%s\n' \
         "$(date '+%Y-%m-%d %H:%M:%S')" "$SELECTED_NAMESPACE" "${REQUIRED_DEPENDENCIES:-<none>}" >> "$LOG_FILE"
+
+    RESOLVED_DEPENDENCIES=""
+    while IFS= read -r DEPENDENCY; do
+        DEPENDENCY=$(printf '%s' "$DEPENDENCY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[\[\]" ]//g')
+        [[ -z "$DEPENDENCY" ]] && continue
+        RESOLVED_APP_ID=""
+        RESOLVED_VERSION=""
+        RESOLVED_KIND=""
+        if resolve_dependency "$DEPENDENCY" "$SELECTED_APPS" "App" || \
+           resolve_dependency "$DEPENDENCY" "${CLUSTER_APPS:-}" "ClusterApp"; then
+            [[ -n "$RESOLVED_DEPENDENCIES" ]] && RESOLVED_DEPENDENCIES+=", "
+            RESOLVED_DEPENDENCIES+="$RESOLVED_APP_ID-$RESOLVED_VERSION"
+        fi
+    done < <(printf '%s' "$REQUIRED_DEPENDENCIES" | tr ',' '\n')
 }
 
 confirm_final_summary() {
@@ -471,7 +498,7 @@ confirm_final_summary() {
     summary_row "Workspaces Discovered" "${#WORKSPACE_ROWS[@]}"
     summary_row "Target Workspace" "$(workspace_display_name "$SELECTED_WORKSPACE")"
     summary_row "Target Namespace" "$SELECTED_NAMESPACE"
-summary_row "Target Prerequisites" "${REQUIRED_DEPENDENCIES:-None found}"
+    summary_row "Target Prerequisites" "${RESOLVED_DEPENDENCIES:-${REQUIRED_DEPENDENCIES:-None found}}"
     summary_row "Execution Log" "$LOG_FILE"
     frame_row ""
     frame_row "$PROMPT_TEXT"
