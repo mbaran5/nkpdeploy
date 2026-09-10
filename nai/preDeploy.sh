@@ -241,17 +241,28 @@ discover_workspaces_and_apps() {
 
     show_app_table "Available workspaces" "$WORKSPACES_OUTPUT"
 
-    # nkp prints a table whose first column is the workspace name. Keep the
-    # namespace from column two when supplied; otherwise workspace resources
-    # use the workspace name as their namespace.
-    while IFS=$'\t' read -r WORKSPACE_NAME WORKSPACE_NAMESPACE; do
-        [[ -z "$WORKSPACE_NAME" ]] && continue
-        [[ "$WORKSPACE_NAME" == "NAME" || "$WORKSPACE_NAME" =~ ^-+$ ]] && continue
-        [[ "$WORKSPACE_NAME" =~ ^[[:space:]]*[-]+$ ]] && continue
-        [[ "$WORKSPACE_NAME" =~ ^(NAME|No|Error|Warning)$ ]] && continue
-        [[ -z "$WORKSPACE_NAMESPACE" ]] && WORKSPACE_NAMESPACE="$WORKSPACE_NAME"
-        WORKSPACE_ROWS+=("$WORKSPACE_NAME|$WORKSPACE_NAMESPACE")
-    done < <(printf '%s\n' "$WORKSPACES_OUTPUT" | awk 'NR > 1 && NF {print $1 "\t" $2}')
+    # Prefer structured output. The human-readable table varies between NKP
+    # releases and may include notices before the header, which made the
+    # earlier positional parser miss every workspace.
+    local WORKSPACES_JSON=""
+    WORKSPACES_JSON=$(nkp get workspaces -o json 2>/dev/null) || true
+    if [[ "$WORKSPACES_JSON" == \{* ]] && command -v jq >/dev/null 2>&1; then
+        while IFS=$'\t' read -r WORKSPACE_NAME WORKSPACE_NAMESPACE; do
+            [[ -z "$WORKSPACE_NAME" ]] && continue
+            [[ -z "$WORKSPACE_NAMESPACE" || "$WORKSPACE_NAMESPACE" == "null" ]] && WORKSPACE_NAMESPACE="$WORKSPACE_NAME"
+            WORKSPACE_ROWS+=("$WORKSPACE_NAME|$WORKSPACE_NAMESPACE")
+        done < <(printf '%s' "$WORKSPACES_JSON" | jq -r '(.items // .entities // [])[] | [(.metadata.name // .name), (.metadata.namespace // .namespace // "")] | @tsv' 2>/dev/null)
+    fi
+
+    # Fallback for NKP versions that do not support -o json.
+    if (( ${#WORKSPACE_ROWS[@]} == 0 )); then
+        while IFS=$'\t' read -r WORKSPACE_NAME WORKSPACE_NAMESPACE; do
+            [[ -z "$WORKSPACE_NAME" ]] && continue
+            [[ "$WORKSPACE_NAME" =~ ^(NAME|NAMESPACE|No|Error|Warning)$ || "$WORKSPACE_NAME" =~ ^-+$ ]] && continue
+            [[ -z "$WORKSPACE_NAMESPACE" || "$WORKSPACE_NAMESPACE" =~ ^-+$ ]] && WORKSPACE_NAMESPACE="$WORKSPACE_NAME"
+            WORKSPACE_ROWS+=("$WORKSPACE_NAME|$WORKSPACE_NAMESPACE")
+        done < <(printf '%s\n' "$WORKSPACES_OUTPUT" | sed $'s/\033\\[[0-9;]*m//g;s/\302\240/ /g' | awk '/^[[:space:]]*NAME([[:space:]]|$)/ {found=1; next} found && NF {print $1 "\t" $2}')
+    fi
 
     if (( ${#WORKSPACE_ROWS[@]} == 0 )); then
         status "$RED" "No workspaces were found in nkp output."
