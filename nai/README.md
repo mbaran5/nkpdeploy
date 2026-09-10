@@ -37,11 +37,11 @@ Ensure the following applications are marked as **"Enabled"** within your target
 
 Before installing NAI from the application catalog, the cluster needs a storage class backed by the available NFS export, two namespaces, and registry secrets.
 
-Use the provided Bash script to enter the kubeconfig path, NFS server/export details, and DockerHub credentials. The script then interactively applies the prerequisites.
+Use the provided Bash script to enter the kubeconfig path, NFS server/export details, and DockerHub credentials. The script temporarily exports the kubeconfig, discovers all NKP workspaces, and lets you select the target workspace with the keyboard. It also displays the workspace and cluster applications, then identifies the prerequisites required by `nutanix-ai-2.8.0`.
 
 ![NAI prerequisite setup summary](images/predeploy-summary.png)
 
-The final review screen confirms the values before anything is applied. The DockerHub PAT is masked while it is entered and displayed.
+The final review screen confirms the selected workspace and targeted prerequisite applications before anything is applied. No resources or applications are installed until you answer `Y`. The DockerHub PAT is masked while it is entered and displayed.
 
 ```bash
 # Download helper script and make it executable

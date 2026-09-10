@@ -26,6 +26,7 @@ tui_enter() {
 }
 
 tui_restore() {
+    stty echo icanon < /dev/tty 2>/dev/null || true
     if [[ "$ALT_SCREEN_ACTIVE" == 1 ]]; then
         printf '\033[?7h\033[?25h\033[0m\033[?1049l' >&2
         ALT_SCREEN_ACTIVE=0
@@ -75,6 +76,18 @@ frame_footer() {
 
 status() {
     printf '%b  ●%b %s\n' "$1" "$RESET" "$2" >&2
+}
+
+abort_with_error() {
+    local MESSAGE="$1"
+    frame_header "Unable to continue"
+    frame_row ""
+    status "$RED" "$MESSAGE"
+    frame_row ""
+    frame_footer "Press Enter to exit   Ctrl-C exit"
+    printf '\n' >&2
+    read -r < /dev/tty
+    exit 1
 }
 
 prompt() {
@@ -157,7 +170,212 @@ read_confirmation() {
     done
 }
 
-# --- Input screen ---
+workspace_display_name() {
+    [[ "$1" == "kommander-workspace" ]] && printf '%s' "Management Cluster" || printf '%s' "$1"
+}
+
+show_app_table() {
+    local TITLE="$1" OUTPUT="$2"
+    frame_row ""
+    frame_row "  $TITLE"
+    while IFS= read -r LINE; do
+        [[ -n "$LINE" ]] && frame_row "    $LINE"
+    done <<< "$OUTPUT"
+}
+
+install_required_apps() {
+    local WORKSPACE_NAME="$1"
+    local WORKSPACE_NAMESPACE="$2"
+    local APP_OUTPUT="$3"
+    local REQUIRED="${REQUIRED_DEPENDENCIES:-}"
+    local DEPENDENCY APP_NAME APP_VERSION
+
+    [[ -z "$REQUIRED" ]] && return 0
+
+    frame_row ""
+    frame_row "  Required dependencies for nutanix-ai-2.8.0"
+    while IFS= read -r DEPENDENCY; do
+        DEPENDENCY=$(printf '%s' "$DEPENDENCY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[\[\]" ]//g')
+        [[ -z "$DEPENDENCY" ]] && continue
+
+        # Dependencies are represented as app-name-version. Split at the
+        # version suffix so app names containing hyphens remain intact.
+        if [[ "$DEPENDENCY" =~ ^(.+)-([0-9]+\.[0-9]+\.[0-9]+[^/]*)$ ]]; then
+            APP_NAME="${BASH_REMATCH[1]}"
+            APP_VERSION="${BASH_REMATCH[2]}"
+        else
+            status "$YELLOW" "Skipping unrecognized dependency: $DEPENDENCY"
+            continue
+        fi
+
+        if printf '%s\n' "$APP_OUTPUT" | grep -Eq "^[[:space:]]*${APP_NAME}[[:space:]]+.*${APP_VERSION}([[:space:]]|$)"; then
+            status "$GREEN" "$APP_NAME-$APP_VERSION already available in $(workspace_display_name "$WORKSPACE_NAME")."
+            continue
+        fi
+
+        status "$CYAN" "Installing $APP_NAME-$APP_VERSION in $(workspace_display_name "$WORKSPACE_NAME")..."
+        if ! nkp create appdeployment "$APP_NAME" \
+            --app "$APP_NAME-$APP_VERSION" \
+            --workspace "$WORKSPACE_NAME"; then
+            status "$RED" "Failed to install $APP_NAME-$APP_VERSION."
+            return 1
+        fi
+    done < <(printf '%s' "$REQUIRED" | tr ',' '\n')
+}
+
+discover_workspaces_and_apps() {
+    local WORKSPACES_OUTPUT=""
+    local CLUSTER_APPS=""
+    local WORKSPACE_NAME WORKSPACE_NAMESPACE DISPLAY_NAME APPS
+    local WORKSPACE_ROWS=()
+    local INDEX=0
+
+    frame_header "Discovering workspaces and applications"
+    frame_row ""
+    status "$CYAN" "Running nkp get workspaces..."
+    WORKSPACES_OUTPUT=$(nkp get workspaces 2>&1) || {
+        status "$RED" "Unable to retrieve workspaces."
+        printf '%s\n' "$WORKSPACES_OUTPUT" >&2
+        return 1
+    }
+
+    show_app_table "Available workspaces" "$WORKSPACES_OUTPUT"
+
+    # nkp prints a table whose first column is the workspace name. Keep the
+    # namespace from column two when supplied; otherwise workspace resources
+    # use the workspace name as their namespace.
+    while IFS=$'\t' read -r WORKSPACE_NAME WORKSPACE_NAMESPACE; do
+        [[ -z "$WORKSPACE_NAME" ]] && continue
+        [[ "$WORKSPACE_NAME" == "NAME" || "$WORKSPACE_NAME" =~ ^-+$ ]] && continue
+        [[ "$WORKSPACE_NAME" =~ ^[[:space:]]*[-]+$ ]] && continue
+        [[ "$WORKSPACE_NAME" =~ ^(NAME|No|Error|Warning)$ ]] && continue
+        [[ -z "$WORKSPACE_NAMESPACE" ]] && WORKSPACE_NAMESPACE="$WORKSPACE_NAME"
+        WORKSPACE_ROWS+=("$WORKSPACE_NAME|$WORKSPACE_NAMESPACE")
+    done < <(printf '%s\n' "$WORKSPACES_OUTPUT" | awk 'NR > 1 && NF {print $1 "\t" $2}')
+
+    if (( ${#WORKSPACE_ROWS[@]} == 0 )); then
+        status "$RED" "No workspaces were found in nkp output."
+        return 1
+    fi
+
+    status "$CYAN" "Listing cluster-scoped applications..."
+    if ! CLUSTER_APPS=$(kubectl get clusterapps \
+        -o custom-columns='NAME:.metadata.name,APP-ID:.spec.appId,VERSION:.spec.version' 2>&1); then
+        status "$RED" "Unable to retrieve cluster applications."
+        show_app_table "kubectl error" "$CLUSTER_APPS"
+        return 1
+    fi
+    show_app_table "Cluster applications" "$CLUSTER_APPS"
+
+    for ROW in "${WORKSPACE_ROWS[@]}"; do
+        WORKSPACE_NAME="${ROW%%|*}"
+        WORKSPACE_NAMESPACE="${ROW#*|}"
+        DISPLAY_NAME=$(workspace_display_name "$WORKSPACE_NAME")
+        status "$CYAN" "Listing applications in $DISPLAY_NAME..."
+        if ! APPS=$(kubectl get apps -n "$WORKSPACE_NAMESPACE" \
+            -o custom-columns='NAME:.metadata.name,APP-ID:.spec.appId,VERSION:.spec.version' 2>&1); then
+            status "$RED" "Unable to access namespace '$WORKSPACE_NAMESPACE'."
+            show_app_table "kubectl error" "$APPS"
+            return 1
+        fi
+        show_app_table "Workspace applications: $DISPLAY_NAME" "$APPS"
+        INDEX=$((INDEX + 1))
+    done
+}
+
+select_workspace() {
+    local CURRENT=0 KEY KEY2 ROW NAME NAMESPACE DISPLAY INDEX
+    stty -icanon -echo < /dev/tty 2>/dev/null || true
+    while true; do
+        frame_header "Select target workspace"
+        frame_row ""
+        frame_row "  Use ↑/↓ or j/k to select a workspace, then press Enter."
+        frame_row ""
+        for INDEX in "${!WORKSPACE_ROWS[@]}"; do
+            ROW="${WORKSPACE_ROWS[$INDEX]}"
+            NAME="${ROW%%|*}"
+            NAMESPACE="${ROW#*|}"
+            DISPLAY=$(workspace_display_name "$NAME")
+            if (( INDEX == CURRENT )); then
+                frame_row "  > $DISPLAY ($NAME)"
+            else
+                frame_row "    $DISPLAY ($NAME)"
+            fi
+        done
+        local CONTENT_ROWS=$((3 + ${#WORKSPACE_ROWS[@]}))
+        local BLANK_ROWS=$((SCREEN_ROWS - 7 - CONTENT_ROWS))
+        (( BLANK_ROWS < 0 )) && BLANK_ROWS=0
+        for ((INDEX=0; INDEX<BLANK_ROWS; INDEX++)); do frame_row ""; done
+        frame_footer "↑/↓ select   Enter confirm   Ctrl-C exit"
+
+        IFS= read -r -s -n 1 KEY < /dev/tty
+        if [[ "$KEY" == $'\033' ]]; then
+            IFS= read -r -s -n 2 KEY2 < /dev/tty
+            case "$KEY2" in
+                '[A') (( CURRENT > 0 )) && CURRENT=$((CURRENT - 1)) ;;
+                '[B') (( CURRENT < ${#WORKSPACE_ROWS[@]} - 1 )) && CURRENT=$((CURRENT + 1)) ;;
+            esac
+        elif [[ "$KEY" == "k" || "$KEY" == "K" ]]; then
+            (( CURRENT > 0 )) && CURRENT=$((CURRENT - 1))
+        elif [[ "$KEY" == "j" || "$KEY" == "J" ]]; then
+            (( CURRENT < ${#WORKSPACE_ROWS[@]} - 1 )) && CURRENT=$((CURRENT + 1))
+        elif [[ "$KEY" == $'\n' || "$KEY" == $'\r' ]]; then
+            ROW="${WORKSPACE_ROWS[$CURRENT]}"
+            SELECTED_WORKSPACE="${ROW%%|*}"
+            SELECTED_NAMESPACE="${ROW#*|}"
+            stty echo icanon < /dev/tty 2>/dev/null || true
+            return 0
+        fi
+    done
+}
+
+load_selected_dependencies() {
+    if ! SELECTED_APPS=$(kubectl get apps -n "$SELECTED_NAMESPACE" \
+        -o custom-columns='NAME:.metadata.name,APP-ID:.spec.appId,VERSION:.spec.version' 2>&1); then
+        return 1
+    fi
+    REQUIRED_DEPENDENCIES=$(kubectl get app nutanix-ai-2.8.0 \
+        -n "$SELECTED_NAMESPACE" \
+        -o jsonpath='{.metadata.annotations.apps\.kommander\.d2iq\.io/required-dependencies}{"\n"}' 2>/dev/null) || true
+}
+
+confirm_final_summary() {
+    local PROMPT_TEXT="  Proceed with prerequisite and app setup? [Y/N]"
+    local INPUT_COLUMN=$((2 + ${#PROMPT_TEXT}))
+    local CONTENT_ROWS=0 BLANK_ROWS=0 INDEX=0 CONFIRM=""
+
+    frame_setup
+    printf '\033[?7l\033[?25l\033[2J\033[H' >&2
+    printf '%b╭%s╮%b\n' "$PURPLE" "$FRAME_LINE" "$RESET" >&2
+    frame_row "  NUTANIX ENTERPRISE AI"
+    frame_row "  Final deployment summary"
+    printf '%b├%s┤%b\n' "$PURPLE" "$FRAME_LINE" "$RESET" >&2
+    summary_row "Kubeconfig Path" "$KUBECONFIG_PATH"
+    summary_row "NFS Path" "$NFS_PATH"
+    summary_row "NFS Server" "$NFS_SERVER"
+    summary_row "DockerHub Username" "$DOCKER_USER"
+    summary_row "DockerHub PAT" "********"
+    summary_row "Workspaces Discovered" "${#WORKSPACE_ROWS[@]}"
+    summary_row "Target Workspace" "$(workspace_display_name "$SELECTED_WORKSPACE")"
+    summary_row "Target Namespace" "$SELECTED_NAMESPACE"
+    summary_row "Target Prerequisites" "${REQUIRED_DEPENDENCIES:-None found}"
+    frame_row ""
+    frame_row "$PROMPT_TEXT"
+    CONTENT_ROWS=11
+    BLANK_ROWS=$((SCREEN_ROWS - 7 - CONTENT_ROWS))
+    (( BLANK_ROWS < 0 )) && BLANK_ROWS=0
+    for ((INDEX=0; INDEX<BLANK_ROWS; INDEX++)); do frame_row ""; done
+    frame_footer "Type Y or N, then Enter   Ctrl-C exit"
+    printf '\033[%dA\033[%dG\033[?25h' "$((BLANK_ROWS + 3))" "$INPUT_COLUMN" >&2
+
+    while true; do
+        IFS= read -r CONFIRM < /dev/tty
+        [[ "$CONFIRM" =~ ^[Yy]$ ]] && return 0
+        [[ "$CONFIRM" =~ ^[Nn]$ ]] && return 1
+    done
+}
+
+# --- Capture inputs, then discover and review before changing the cluster ---
 PROMPT_INDEX=1
 prompt "Kubeconfig File Path"
 KUBECONFIG_PATH="$REPLY"
@@ -174,16 +392,27 @@ PROMPT_INDEX=5
 prompt "DockerHub PAT" true
 DOCKER_PAT="$REPLY"
 
-show_summary
-if ! read_confirmation; then
-    printf '\n%b  ●%b Prerequisite setup cancelled.\n' "$YELLOW" "$RESET" >&2
+export KUBECONFIG="$KUBECONFIG_PATH"
+if [[ ! -r "$KUBECONFIG_PATH" ]]; then
+    abort_with_error "Kubeconfig file was not found or is not readable: $KUBECONFIG_PATH"
+fi
+
+if ! discover_workspaces_and_apps; then
+    abort_with_error "No usable workspaces or namespaces were found. Check the kubeconfig and cluster access."
+fi
+select_workspace
+if ! load_selected_dependencies; then
+    abort_with_error "Unable to access the selected workspace namespace: $SELECTED_NAMESPACE"
+fi
+
+if ! confirm_final_summary; then
+    printf '\n%b  ●%b Setup cancelled; no resources or applications were installed.\n' "$YELLOW" "$RESET" >&2
     exit 1
 fi
 
 frame_header "Applying prerequisite configuration"
 frame_row ""
-status "$CYAN" "Configuring kubeconfig context..."
-export KUBECONFIG="$KUBECONFIG_PATH"
+status "$CYAN" "Kubeconfig exported for this session."
 
 status "$CYAN" "Applying NAI NFS StorageClass..."
 cat <<EOF | kubectl apply -f -
@@ -218,6 +447,8 @@ kubectl -n envoy-gateway-system create secret docker-registry nai-regcred \
   --docker-password="$DOCKER_PAT" \
   --docker-email="$DOCKER_USER" \
   --dry-run=client -o yaml | kubectl apply -f -
+
+install_required_apps "$SELECTED_WORKSPACE" "$SELECTED_NAMESPACE" "$SELECTED_APPS" || true
 
 frame_header "Prerequisites complete"
 frame_row ""
