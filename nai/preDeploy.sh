@@ -56,9 +56,13 @@ frame_setup() {
     FRAME_LINE="${FRAME_LINE// /─}"
 }
 
+clean_text() {
+    printf '%s' "$1" | sed -E $'s|\033\\[[0-9;?]*[ -/]*[@-~]||g; s|\r| |g; s|\t| |g'
+}
+
 frame_row() {
     local TEXT="$1"
-    TEXT=$(printf '%s' "$TEXT" | sed $'s/\033\\[[0-9;?]*[ -\/]*[@-~]//g;s/\r/ /g;s/\t/ /g')
+    TEXT=$(clean_text "$TEXT")
     (( ${#TEXT} > SCREEN_INNER - 2 )) && TEXT="${TEXT:0:SCREEN_INNER-5}..."
     # Anchor the right border at the terminal edge instead of relying on
     # printf padding, which can drift with wide characters or control codes.
@@ -69,7 +73,7 @@ frame_row() {
 frame_row_color() {
     local COLOR="$1"
     local TEXT="$2"
-    TEXT=$(printf '%s' "$TEXT" | sed $'s/\033\\[[0-9;?]*[ -\/]*[@-~]//g;s/\r/ /g;s/\t/ /g')
+    TEXT=$(clean_text "$TEXT")
     (( ${#TEXT} > SCREEN_INNER - 2 )) && TEXT="${TEXT:0:SCREEN_INNER-5}..."
     printf '\033[2K\033[1G%b│%b%b%s\033[%dG%b│%b\n' \
         "$PURPLE" "$RESET" "$COLOR" "$TEXT" "$SCREEN_COLS" "$PURPLE" "$RESET" >&2
@@ -150,7 +154,7 @@ prompt() {
 summary_row() {
     local LABEL="$1" VALUE="$2" LABEL_WIDTH=24
     local VALUE_WIDTH=$((SCREEN_INNER - LABEL_WIDTH - 5))
-    VALUE=$(printf '%s' "$VALUE" | sed $'s/\033\\[[0-9;?]*[ -\/]*[@-~]//g;s/[\r\n\t]/ /g')
+    VALUE=$(clean_text "$VALUE" | tr '\n' ' ')
     (( ${#VALUE} > VALUE_WIDTH )) && VALUE="${VALUE:0:VALUE_WIDTH-3}..."
     printf '%b│%b %b%-*s%b │ %-*s ' \
         "$PURPLE" "$RESET" "$DIM" "$LABEL_WIDTH" "$LABEL" "$RESET" \
