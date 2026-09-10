@@ -37,11 +37,30 @@ Ensure the following applications are marked as **"Enabled"** within your target
 
 Before installing NAI from the application catalog, the cluster needs a storage class backed by the available NFS export, two namespaces, and registry secrets.
 
-Use the provided Bash script to enter the kubeconfig path, NFS server/export details, and DockerHub credentials. The script temporarily exports the kubeconfig, discovers all NKP workspaces, and lets you select the target workspace with the keyboard. It also displays the workspace and cluster applications, then identifies the prerequisites required by `nutanix-ai-2.8.0`.
+Use the provided Bash script to enter the kubeconfig path, NFS server/export details, and DockerHub credentials. The script temporarily exports the kubeconfig, discovers all NKP workspaces, and lets you select the target workspace with the keyboard. The workspace named `kommander-workspace` is displayed as **Management Cluster**, while the real workspace name is retained for NKP commands.
+
+Before making changes, the script captures:
+
+* All workspaces returned by `nkp get workspaces`.
+* Workspace applications from `kubectl get apps`.
+* Cluster applications from `kubectl get clusterapps`.
+* Required dependencies for `nutanix-ai-2.8.0`.
+
+For each required dependency, the app ID and version are resolved from the captured application inventory. The script then creates the deployment using the true workspace name, for example:
+
+```bash
+nkp create appdeployment envoy-gateway-nai \
+  --app envoy-gateway-nai-1.8.1 \
+  --workspace default-workspace
+```
+
+Existing AppDeployments are detected and skipped, so rerunning the script does not attempt to create duplicates. No StorageClass, secret, or app deployment is created until the final confirmation prompt is answered with `Y`.
 
 ![NAI prerequisite setup summary](images/predeploy-summary.png)
 
-The final review screen confirms the selected workspace and targeted prerequisite applications before anything is applied. No resources or applications are installed until you answer `Y`. The DockerHub PAT is masked while it is entered and displayed.
+The final review screen confirms the selected workspace and targeted prerequisite applications before anything is applied. The completion screen then shows an ordered activity ledger, including the StorageClass, each registry secret, and every app or cluster-app deployment with its result. The DockerHub PAT is masked while it is entered and displayed.
+
+The script writes a raw diagnostic log to a temporary file and displays its location on the completion screen. This log contains full command output and errors without the TUI border or screen-width clipping.
 
 ```bash
 # Download helper script and make it executable
