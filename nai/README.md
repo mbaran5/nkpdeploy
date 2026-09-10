@@ -4,7 +4,7 @@
 ![Nutanix](https://img.shields.io/badge/Platform-Nutanix_Enterprise_AI-0A2E66?style=flat-square)
 ![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?style=flat-square&logo=gnu-bash)
 
-This document provides a technical walkthrough for deploying **Nutanix Enterprise AI (NAI)** on top of the Nutanix Kubernetes Platform (NKP). It covers hardware sizing, prerequisite applications, and the baseline cluster configurations required before initiating the deployment via the NKP App Catalog.
+This document provides a technical walkthrough for deploying **Nutanix Enterprise AI (NAI)** on top of the Nutanix Kubernetes Platform (NKP). It covers hardware sizing, prerequisite applications, and the baseline cluster configuration required before initiating the deployment through the NKP Application Catalog.
 
 ---
 
@@ -17,7 +17,7 @@ Before beginning the deployment, ensure your environment meets the following har
 * **CPU Architecture:** **AVX-512** instruction set support is strictly required to run any Llama 3.2 model (Intel Sapphire Rapids or newer).
 
 ### 2. Storage Requirements
-* **Nutanix Files:** Must be deployed with an NFS share present, active, and reachable by the worker nodes.
+* **NFS storage:** An NFS export must be available, active, and reachable by the worker nodes. Nutanix Files is not specifically required.
 
 ### 3. Required NKP Applications
 Ensure the following applications are marked as **"Enabled"** within your target NKP cluster/workspace:
@@ -35,9 +35,13 @@ Ensure the following applications are marked as **"Enabled"** within your target
 
 ## ⚙️ Pre-Deployment Configuration
 
-Before installing NAI from the application catalog, the cluster needs specific namespaces, storage classes, and registry secrets. 
+Before installing NAI from the application catalog, the cluster needs a storage class backed by the available NFS export, two namespaces, and registry secrets.
 
-Use the provided bash script to interactively deploy the prerequisites.
+Use the provided Bash script to enter the kubeconfig path, NFS server/export details, and DockerHub credentials. The script then interactively applies the prerequisites.
+
+![NAI prerequisite setup summary](images/predeploy-summary.png)
+
+The final review screen confirms the values before anything is applied. The DockerHub PAT is masked while it is entered and displayed.
 
 ```bash
 # Download helper script and make it executable
@@ -50,7 +54,7 @@ chmod +x naiDeploy.sh
 
 ## 🚀 Installation
 
-Once the prerequisite configurations (StorageClass, Namespaces, and Secrets) are successfully applied to your cluster, proceed with the UI installation.
+Once the prerequisite configurations (StorageClass, namespaces, and registry secrets) are successfully applied to your cluster, proceed with the UI installation.
 
 1. Log into your **NKP Dashboard**.
 2. Navigate to the **NKP Application Catalog**.
